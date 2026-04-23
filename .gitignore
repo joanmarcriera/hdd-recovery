@@ -1,0 +1,37 @@
+# Python / uv
+tui/.venv/
+tui/__pycache__/
+tui/**/__pycache__/
+tui/*.pyc
+tui/**/*.pyc
+*.egg-info/
+
+# Recovery data — never commit these
+*.img
+*.img.gz
+*.map
+*.analysis.sqlite
+*.analysis.sqlite-wal
+*.analysis.sqlite-shm
+
+# Per-disk job configs contain device paths — keep template only
+jobs/*.conf
+!jobs/ddrescue-job-template.conf
+
+# Export outputs and logs
+/mnt/
+exports/
+logs/
+recovered/
+indexes/
+reports/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.bak
+*~

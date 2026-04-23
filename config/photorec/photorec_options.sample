@@ -1,0 +1,10 @@
+# PhotoRec automation is brittle across versions.
+# Keep this file as an operator note, not a trusted universal config.
+#
+# Suggested broad pass:
+#   photorec /log /d <output-dir> <image>
+#
+# Suggested follow-up focused review:
+#   use PhotoRec interactively and enable only image/document/archive/database types
+#   when a broad first carve is too noisy.
+

@@ -1,0 +1,18 @@
+wallet.dat
+wallet
+bitcoin
+btc
+electrum
+armory
+multibit
+seed
+mnemonic
+xprv
+xpub
+keystore
+metamask
+ledger
+trezor
+private key
+recovery phrase
+

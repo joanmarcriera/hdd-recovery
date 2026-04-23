@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+ROOT_DIR="/root/hdd-recovery"
+CONFIG_FILE="${HDD_RECOVERY_CONFIG:-$ROOT_DIR/config/analysis-pipeline.env}"
+SCHEMA_FILE="$ROOT_DIR/sql/analysis-schema.sql"
+
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
+
+timestamp_utc() {
+  date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
+
+log() {
+  printf '[%s] %s\n' "$(timestamp_utc)" "$*" >&2
+}
+
+die() {
+  log "ERROR: $*"
+  exit 1
+}
+
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+abs_path() {
+  readlink -f "$1"
+}
+
+image_name() {
+  basename "$1"
+}
+
+image_basename() {
+  local name
+  name="$(basename "$1")"
+  printf '%s\n' "${name%.*}"
+}
+
+default_db_path() {
+  printf '%s%s\n' "$1" "${DB_SUFFIX:-.analysis.sqlite}"
+}
+
+default_export_root() {
+  local image="$1"
+  local base
+  base="$(image_basename "$image")"
+  printf '%s/%s\n' "${EXPORT_ROOT:-/mnt/recovery16tb/recovery/exports}" "$base"
+}
+
+ensure_parent_dir() {
+  mkdir -p "$(dirname "$1")"
+}
+
+ensure_image_file() {
+  [[ -n "${1:-}" ]] || die "image path is required"
+  [[ -f "$1" ]] || die "image file not found: $1"
+}
+
+ensure_db() {
+  [[ -n "${1:-}" ]] || die "database path is required"
+  ensure_parent_dir "$1"
+  sqlite3 "$1" < "$SCHEMA_FILE" >/dev/null
+}
+
+db_value() {
+  local db="$1"
+  local sql="$2"
+  sqlite3 -noheader -batch "$db" "$sql"
+}
+
+sql_escape() {
+  printf "%s" "$1" | sed "s/'/''/g"
+}
+
+run_sql() {
+  local db="$1"
+  shift
+  sqlite3 "$db" "$@"
+}
+
+record_scan_start() {
+  local db="$1" stage="$2" cmdline="$3" log_path="$4" output_dir="$5"
+  local started_at
+  started_at="$(timestamp_utc)"
+  local sql
+  sql=$(cat <<EOF
+INSERT INTO scan_runs(stage,status,started_at,command_line,log_path,output_dir)
+VALUES('$(sql_escape "$stage")','running','$(sql_escape "$started_at")','$(sql_escape "$cmdline")','$(sql_escape "$log_path")','$(sql_escape "$output_dir")');
+SELECT last_insert_rowid();
+EOF
+)
+  sqlite3 -batch "$db" "$sql"
+}
+
+record_scan_end() {
+  local db="$1" run_id="$2" status="$3" notes="${4:-}"
+  sqlite3 "$db" <<EOF
+UPDATE scan_runs
+SET status='$(sql_escape "$status")',
+    ended_at='$(timestamp_utc)',
+    notes='$(sql_escape "$notes")'
+WHERE id=$run_id;
+EOF
+}
+
+ensure_work_dirs() {
+  local export_root="$1"
+  mkdir -p \
+    "$export_root/logs" \
+    "$export_root/reports" \
+    "$export_root/state" \
+    "$export_root/structure" \
+    "$export_root/recovered" \
+    "$export_root/indexes" \
+    "$export_root/hits" \
+    "$export_root/exports"
+}
+
+db_image_export_root() {
+  db_value "$1" "SELECT export_root FROM image_info WHERE id=1;"
+}
+
+db_image_path() {
+  db_value "$1" "SELECT image_path FROM image_info WHERE id=1;"
+}
+
+db_image_basename() {
+  db_value "$1" "SELECT image_basename FROM image_info WHERE id=1;"
+}
+
+with_log() {
+  local log_path="$1"
+  shift
+  ensure_parent_dir "$log_path"
+  (
+    set -o pipefail
+    "$@" 2>&1 | tee "$log_path"
+  )
+}
+
+register_artifacts_from_dir() {
+  local db="$1" method="$2" root_dir="$3" run_id="$4"
+  [[ -d "$root_dir" ]] || return 0
+  log "Registering recovered artifacts for method=$method from $root_dir"
+  python3 - "$db" "$method" "$root_dir" "$run_id" <<'PY'
+import hashlib
+import mimetypes
+import os
+import sqlite3
+import subprocess
+import sys
+from datetime import datetime, timezone
+
+db_path, method, root_dir, run_id = sys.argv[1:]
+conn = sqlite3.connect(db_path)
+now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+def sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+for dirpath, _, filenames in os.walk(root_dir):
+    for name in filenames:
+      full = os.path.join(dirpath, name)
+      rel = os.path.relpath(full, root_dir)
+      try:
+          size = os.path.getsize(full)
+      except OSError:
+          size = None
+      mime = mimetypes.guess_type(full)[0]
+      file_output = ""
+      try:
+          file_output = subprocess.check_output(["file", "-b", full], text=True).strip()
+      except Exception:
+          file_output = ""
+      digest = sha256(full)
+      conn.execute(
+          """
+          INSERT INTO recovered_artifacts(method, relative_path, full_path, size_bytes, sha256, mime_type, file_output, source_run_id, created_at)
+          VALUES(?,?,?,?,?,?,?,?,?)
+          ON CONFLICT(method, relative_path) DO UPDATE SET
+            full_path=excluded.full_path,
+            size_bytes=excluded.size_bytes,
+            sha256=excluded.sha256,
+            mime_type=excluded.mime_type,
+            file_output=excluded.file_output,
+            source_run_id=excluded.source_run_id
+          """,
+          (method, rel, full, size, digest, mime, file_output, int(run_id), now),
+      )
+
+conn.commit()
+print(f"registered artifacts for method={method}")
+conn.close()
+PY
+}

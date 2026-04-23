@@ -1,0 +1,16 @@
+passport
+invoice
+tax
+payslip
+bank
+account
+backup
+photo
+family
+camera
+iphone
+android
+whatsapp
+telegram
+scan
+

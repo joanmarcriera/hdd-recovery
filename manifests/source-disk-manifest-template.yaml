@@ -1,0 +1,46 @@
+date_started:
+operator:
+host: optiplex7040
+
+source_disk:
+  devnode:
+  by_path:
+  model:
+  serial:
+  size_bytes:
+  transport:
+  attached_via: motherboard_sata
+  notes:
+
+destination:
+  disk: /dev/sdc
+  partition: /dev/sdc1
+  mountpoint: /mnt/recovery16tb
+  images_dir: /mnt/recovery16tb/recovery/images
+  logs_dir: /mnt/recovery16tb/recovery/logs
+  manifests_dir: /mnt/recovery16tb/recovery/manifests
+
+planned_files:
+  image_filename:
+  ddrescue_log_filename:
+  export_subdir:
+
+verification:
+  source_identity_confirmed: false
+  destination_space_checked: false
+  monitor_running: false
+  ddrescue_installed: false
+  source_not_mounted_rw: false
+
+imaging_plan:
+  tool: ddrescue
+  full_disk_first: true
+  direct_mode:
+  retries:
+  notes:
+
+post_run:
+  image_completed:
+  hash_recorded:
+  analysis_started_from_image_only:
+  notes:
