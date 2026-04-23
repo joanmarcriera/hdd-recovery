@@ -376,8 +376,88 @@ STAGES: list[StageDef] = [
         requires_prior=["index-tsk"],
     ),
     StageDef(
-        key="bulk-extractor-raw",
+        key="ntfs-recover",
         number=19,
+        name="NTFS Deleted-File Recovery (optional)",
+        description=(
+            "Recover deleted files from NTFS partitions using ntfsundelete. "
+            "Only useful if the image contains NTFS partitions (Windows disks). "
+            "Runs a scan pass to identify recoverable files, then extracts them."
+        ),
+        script="image-ntfs-recover.sh",
+        args_template=["{db}"],
+        scan_run_key="ntfs-recover",
+        pgrep_pattern="ntfsundelete",
+        runtime_hint="5 – 30 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["index-tsk"],
+    ),
+    StageDef(
+        key="fat-recover",
+        number=20,
+        name="FAT/exFAT Recovery (optional)",
+        description=(
+            "Recover all files including deleted ones from FAT12/FAT16/FAT32/exFAT "
+            "partitions using fatcat. Covers old digital camera cards, USB sticks, "
+            "and legacy Windows partitions."
+        ),
+        script="image-fat-recover.sh",
+        args_template=["{db}"],
+        scan_run_key="fat-recover",
+        pgrep_pattern="fatcat",
+        runtime_hint="5 – 30 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["index-tsk"],
+    ),
+    StageDef(
+        key="xfs-recover",
+        number=21,
+        name="XFS Deleted-File Recovery (optional)",
+        description=(
+            "Recover deleted files from XFS partitions using xfs_undelete.\n\n"
+            "Requires installation:\n"
+            "  apt install xfsprogs tcllib\n"
+            "  git clone https://github.com/ianka/xfs_undelete /opt/xfs_undelete\n"
+            "  ln -s /opt/xfs_undelete/xfs_undelete /usr/local/bin/xfs_undelete"
+        ),
+        script="image-xfs-recover.sh",
+        args_template=["{db}"],
+        scan_run_key="xfs-recover",
+        pgrep_pattern="xfs_undelete",
+        runtime_hint="10 min – 2 h",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["index-tsk"],
+    ),
+    StageDef(
+        key="btrfs-recover",
+        number=22,
+        name="Btrfs Recovery (optional)",
+        description=(
+            "Recover files from Btrfs partitions using btrfs restore. "
+            "btrfs restore is read-only against the source — safe on images. "
+            "Continues past errors with -i flag, so partial output is common "
+            "on damaged filesystems.\n\n"
+            "Requires: apt install btrfs-progs"
+        ),
+        script="image-btrfs-recover.sh",
+        args_template=["{db}"],
+        scan_run_key="btrfs-recover",
+        pgrep_pattern="btrfs",
+        runtime_hint="5 min – 2 h",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["index-tsk"],
+    ),
+    StageDef(
+        key="bulk-extractor-raw",
+        number=23,
         name="Bulk Extractor (raw image)",
         description=(
             "Run bulk_extractor across the entire raw image to extract text artifacts: "
@@ -399,7 +479,7 @@ STAGES: list[StageDef] = [
     # ── Carving ───────────────────────────────────────────────────────────
     StageDef(
         key="carve-foremost",
-        number=20,
+        number=24,
         name="Carve with Foremost",
         description=(
             "Broad signature-based file carving using foremost. "
@@ -418,7 +498,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="carve-scalpel",
-        number=21,
+        number=25,
         name="Carve with Scalpel",
         description=(
             "Controlled carving using a tuned scalpel config targeting wallet files, "
@@ -436,7 +516,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="carve-recoverjpeg",
-        number=22,
+        number=26,
         name="Carve JPEGs with recoverjpeg (optional)",
         description=(
             "Fast JPEG-only carver — lighter and faster than foremost/scalpel "
@@ -456,7 +536,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="carve-magicrescue",
-        number=23,
+        number=27,
         name="Carve with Magicrescue (optional)",
         description=(
             "Recipe-based carver with good coverage for office docs, images, audio, "
@@ -477,7 +557,7 @@ STAGES: list[StageDef] = [
     # ── Post-carve analysis ───────────────────────────────────────────────
     StageDef(
         key="bulk-extractor-recovered",
-        number=24,
+        number=28,
         name="Bulk Extractor (recovered corpus)",
         description=(
             "Run bulk_extractor over the recovered/carved corpus directory. "
@@ -498,7 +578,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="recoll-index",
-        number=25,
+        number=29,
         name="Recoll Full-Text Index (optional)",
         description=(
             "Build a Recoll full-text search index over the recovered corpus. "
@@ -518,7 +598,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="ntfs-artifact-summary",
-        number=26,
+        number=30,
         name="NTFS Artifact Summary",
         description=(
             "Extract Windows-specific traces from raw bulk_extractor output: "
@@ -538,7 +618,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="photorec-broad",
-        number=27,
+        number=31,
         name="PhotoRec Broad Recovery",
         description=(
             "Broadest carver — recovers the most file types from unallocated space. "
@@ -558,7 +638,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="generate-report",
-        number=28,
+        number=32,
         name="Generate Report",
         description=(
             "Generate a summary report for this image covering all stages, "
