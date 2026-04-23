@@ -76,6 +76,10 @@ class DiskInfo:
     map_coverage_pct: Optional[float] = None
     image_info_exists: bool = False
     scan_runs: list[ScanRun] = field(default_factory=list)
+    # safecopy stage marker files (written by image-safecopy-run.sh)
+    safecopy_s1_done: bool = False
+    safecopy_s2_done: bool = False
+    safecopy_s3_done: bool = False
 
     @property
     def display_name(self) -> str:
@@ -179,6 +183,10 @@ def _populate(d: DiskInfo) -> None:
     if d.db_exists:
         d.scan_runs = _load_scan_runs(d.db_path)
         d.image_info_exists = _check_image_info(d.db_path)
+    # safecopy stage marker files
+    d.safecopy_s1_done = (LOG_ROOT / f"{d.basename}-safecopy-stage1.done").exists()
+    d.safecopy_s2_done = (LOG_ROOT / f"{d.basename}-safecopy-stage2.done").exists()
+    d.safecopy_s3_done = (LOG_ROOT / f"{d.basename}-safecopy-stage3.done").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -319,6 +327,9 @@ def get_stage_status(disk: DiskInfo, stage: StageDef) -> StageStatus:  # noqa: C
     if key == "ddrescue-map-status":
         return StageStatus.DONE if disk.map_exists else StageStatus.PENDING
 
+    if key == "ddrescue-mapview":
+        return StageStatus.DONE if disk.map_exists else StageStatus.PENDING
+
     if key in ("ddrescue-retry", "ddrescue-reverse", "ddrescue-retrim"):
         if ddrescue_live:
             return StageStatus.RUNNING
@@ -327,6 +338,26 @@ def get_stage_status(disk: DiskInfo, stage: StageDef) -> StageStatus:  # noqa: C
         if disk.map_coverage_pct is not None and disk.map_coverage_pct >= 99.9:
             return StageStatus.SKIPPED
         return StageStatus.PENDING
+
+    # ── safecopy (marker-file tracked, no DB until init-db) ──────────────
+    if key == "safecopy-stage1":
+        if stage.pgrep_pattern and is_process_live(stage.pgrep_pattern, disk):
+            return StageStatus.RUNNING
+        return StageStatus.DONE if disk.safecopy_s1_done else StageStatus.PENDING
+
+    if key == "safecopy-stage2":
+        if stage.pgrep_pattern and is_process_live(stage.pgrep_pattern, disk):
+            return StageStatus.RUNNING
+        if not disk.safecopy_s1_done:
+            return StageStatus.PENDING
+        return StageStatus.DONE if disk.safecopy_s2_done else StageStatus.PENDING
+
+    if key == "safecopy-stage3":
+        if stage.pgrep_pattern and is_process_live(stage.pgrep_pattern, disk):
+            return StageStatus.RUNNING
+        if not disk.safecopy_s2_done:
+            return StageStatus.PENDING
+        return StageStatus.DONE if disk.safecopy_s3_done else StageStatus.PENDING
 
     # ── init-db ───────────────────────────────────────────────────────────
     if key == "init-db":

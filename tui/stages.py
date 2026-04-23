@@ -25,6 +25,7 @@ class StageDef:
 
 
 STAGES: list[StageDef] = [
+    # ── Acquisition setup ─────────────────────────────────────────────────
     StageDef(
         key="identify-source",
         number=1,
@@ -70,6 +71,7 @@ STAGES: list[StageDef] = [
         requires_db_write=False,
         is_manual=True,
     ),
+    # ── ddrescue imaging ──────────────────────────────────────────────────
     StageDef(
         key="ddrescue-preview",
         number=3,
@@ -130,8 +132,29 @@ STAGES: list[StageDef] = [
         requires_prior=["ddrescue-first"],
     ),
     StageDef(
-        key="ddrescue-retry",
+        key="ddrescue-mapview",
         number=6,
+        name="Detailed Map View",
+        description=(
+            "Detailed text breakdown of the ddrescue map: block regions, "
+            "rescued vs unrescued sectors, error clusters.\n\n"
+            "For a graphical view, run in a separate terminal:\n"
+            "  ddrescueview <mapfile>"
+        ),
+        script="image-mapview.sh",
+        args_template=["{mapfile}"],
+        scan_run_key=None,
+        pgrep_pattern=None,
+        runtime_hint="< 5 sec",
+        rerunnable=True,
+        requires_db_write=False,
+        is_view_only=True,
+        is_optional=True,
+        requires_prior=["ddrescue-first"],
+    ),
+    StageDef(
+        key="ddrescue-retry",
+        number=7,
         name="ddrescue Retry Pass (optional)",
         description=(
             "Retry unread sectors using direct I/O and up to 3 attempts per block. "
@@ -151,7 +174,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="ddrescue-reverse",
-        number=7,
+        number=8,
         name="ddrescue Reverse Pass (optional)",
         description="Approach remaining bad sectors from the opposite direction.",
         script="ddrescue-run.sh",
@@ -167,7 +190,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="ddrescue-retrim",
-        number=8,
+        number=9,
         name="ddrescue Retrim Pass (optional)",
         description="Mark failed blocks for retrim and make one final conservative attempt.",
         script="ddrescue-run.sh",
@@ -181,9 +204,70 @@ STAGES: list[StageDef] = [
         requires_prior=["ddrescue-first"],
         auto_stdin=b"y\n",
     ),
+    # ── safecopy (alternative imager) ─────────────────────────────────────
+    StageDef(
+        key="safecopy-stage1",
+        number=10,
+        name="Safecopy Stage 1 (optional)",
+        description=(
+            "Alternative imager for disks ddrescue cannot handle.\n\n"
+            "Stage 1: fast pass — rescue most data, no retries, skip bad areas. "
+            "Writes a badblocks file for stage 2.\n\n"
+            "Use safecopy INSTEAD OF ddrescue when ddrescue exits immediately or "
+            "makes no forward progress. Do not mix both on the same image."
+        ),
+        script="image-safecopy-run.sh",
+        args_template=["{conf}", "stage1", "--run"],
+        scan_run_key=None,
+        pgrep_pattern="safecopy",
+        runtime_hint="1 – 12 h",
+        rerunnable=True,
+        requires_db_write=False,
+        warning="Alternative to ddrescue — use when ddrescue makes no progress. Do NOT mix both.",
+        is_optional=True,
+        requires_prior=["create-job-config"],
+    ),
+    StageDef(
+        key="safecopy-stage2",
+        number=11,
+        name="Safecopy Stage 2 (optional)",
+        description=(
+            "Stage 2: search for exact boundaries of bad areas identified in stage 1. "
+            "Slower but recovers data around bad regions."
+        ),
+        script="image-safecopy-run.sh",
+        args_template=["{conf}", "stage2", "--run"],
+        scan_run_key=None,
+        pgrep_pattern="safecopy",
+        runtime_hint="1 – 6 h",
+        rerunnable=True,
+        requires_db_write=False,
+        is_optional=True,
+        requires_prior=["safecopy-stage1"],
+    ),
+    StageDef(
+        key="safecopy-stage3",
+        number=12,
+        name="Safecopy Stage 3 (optional)",
+        description=(
+            "Stage 3: maximum retries with head realignment tricks. "
+            "Highest stress on the hardware — last resort."
+        ),
+        script="image-safecopy-run.sh",
+        args_template=["{conf}", "stage3", "--run"],
+        scan_run_key=None,
+        pgrep_pattern="safecopy",
+        runtime_hint="1 – 8 h",
+        rerunnable=True,
+        requires_db_write=False,
+        warning="Maximum disk stress — only run when stages 1 and 2 leave significant unread areas.",
+        is_optional=True,
+        requires_prior=["safecopy-stage2"],
+    ),
+    # ── Analysis ─────────────────────────────────────────────────────────
     StageDef(
         key="init-db",
-        number=9,
+        number=13,
         name="Initialize Image DB",
         description=(
             "Create or refresh the per-image SQLite catalog and export directory tree. "
@@ -200,7 +284,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="structure-scan",
-        number=10,
+        number=14,
         name="Structure Scan",
         description=(
             "Run fdisk, parted, mmls, img_stat, and blkid on the image. "
@@ -218,7 +302,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="index-tsk",
-        number=11,
+        number=15,
         name="TSK Filesystem Index",
         description=(
             "Build a filesystem-aware file inventory using fiwalk. "
@@ -237,7 +321,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="detect-wallets",
-        number=12,
+        number=16,
         name="Wallet Detection",
         description=(
             "Score files from the filesystem inventory against wallet keywords and extensions. "
@@ -256,7 +340,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="detect-pictures",
-        number=13,
+        number=17,
         name="Picture Detection",
         description=(
             "Score files from the filesystem inventory against picture extensions "
@@ -274,7 +358,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="ext-recover",
-        number=14,
+        number=18,
         name="Ext Deleted-File Recovery (optional)",
         description=(
             "Run ext3/ext4 journal-aware deleted file recovery using extundelete and/or ext4magic. "
@@ -293,7 +377,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="bulk-extractor-raw",
-        number=15,
+        number=19,
         name="Bulk Extractor (raw image)",
         description=(
             "Run bulk_extractor across the entire raw image to extract text artifacts: "
@@ -312,9 +396,10 @@ STAGES: list[StageDef] = [
         warning="Very long-running. Monitor output growth: du -sh on indexes/bulk_extractor_raw/",
         requires_prior=["init-db"],
     ),
+    # ── Carving ───────────────────────────────────────────────────────────
     StageDef(
         key="carve-foremost",
-        number=16,
+        number=20,
         name="Carve with Foremost",
         description=(
             "Broad signature-based file carving using foremost. "
@@ -333,7 +418,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="carve-scalpel",
-        number=17,
+        number=21,
         name="Carve with Scalpel",
         description=(
             "Controlled carving using a tuned scalpel config targeting wallet files, "
@@ -350,8 +435,49 @@ STAGES: list[StageDef] = [
         requires_prior=["init-db"],
     ),
     StageDef(
+        key="carve-recoverjpeg",
+        number=22,
+        name="Carve JPEGs with recoverjpeg (optional)",
+        description=(
+            "Fast JPEG-only carver — lighter and faster than foremost/scalpel "
+            "when the primary goal is recovering photos.\n\n"
+            "Scans for JPEG markers (SOI/EOI), extracts every recoverable image. "
+            "Outputs named image000000.jpg, image000001.jpg, etc."
+        ),
+        script="image-carve.sh",
+        args_template=["{db}", "--method", "recoverjpeg"],
+        scan_run_key="carve-recoverjpeg",
+        pgrep_pattern="recoverjpeg",
+        runtime_hint="5 – 30 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["init-db"],
+    ),
+    StageDef(
+        key="carve-magicrescue",
+        number=23,
+        name="Carve with Magicrescue (optional)",
+        description=(
+            "Recipe-based carver with good coverage for office docs, images, audio, "
+            "archives, and SQLite databases (useful for wallet.dat).\n\n"
+            "Uses recipes: jpeg-jfif, jpeg-exif, png, sqlite, zip, rar, gzip, msoffice, "
+            "mp3-id3v1, mp3-id3v2, avi."
+        ),
+        script="image-carve.sh",
+        args_template=["{db}", "--method", "magicrescue"],
+        scan_run_key="carve-magicrescue",
+        pgrep_pattern="magicrescue",
+        runtime_hint="15 min – 2 h",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["init-db"],
+    ),
+    # ── Post-carve analysis ───────────────────────────────────────────────
+    StageDef(
         key="bulk-extractor-recovered",
-        number=18,
+        number=24,
         name="Bulk Extractor (recovered corpus)",
         description=(
             "Run bulk_extractor over the recovered/carved corpus directory. "
@@ -372,7 +498,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="recoll-index",
-        number=19,
+        number=25,
         name="Recoll Full-Text Index (optional)",
         description=(
             "Build a Recoll full-text search index over the recovered corpus. "
@@ -392,7 +518,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="ntfs-artifact-summary",
-        number=20,
+        number=26,
         name="NTFS Artifact Summary",
         description=(
             "Extract Windows-specific traces from raw bulk_extractor output: "
@@ -412,7 +538,7 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="photorec-broad",
-        number=21,
+        number=27,
         name="PhotoRec Broad Recovery",
         description=(
             "Broadest carver — recovers the most file types from unallocated space. "
@@ -432,11 +558,12 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="generate-report",
-        number=22,
+        number=28,
         name="Generate Report",
         description=(
             "Generate a summary report for this image covering all stages, "
-            "file counts, wallet candidates, picture candidates, and recovered artifacts. "
+            "file counts, wallet candidates, picture candidates, recovered artifact "
+            "locations with disk usage, and bulk extractor hits. "
             "Re-run after any heavy stage to refresh the summary."
         ),
         script="image-report.sh",

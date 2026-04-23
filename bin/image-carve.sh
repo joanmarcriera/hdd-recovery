@@ -57,6 +57,27 @@ run_one() {
     scalpel)
       { scalpel -c "$ROOT_DIR/config/scalpel/scalpel-wallet-and-docs.conf" -o "$tool_dir" "$image"; } 2>&1 | tee "$log_path" || status="partial"
       ;;
+    recoverjpeg)
+      need_cmd recoverjpeg
+      { recoverjpeg -o "$tool_dir" "$image"; } 2>&1 | tee "$log_path" || status="partial"
+      ;;
+    magicrescue)
+      need_cmd magicrescue
+      local recipes_dir="/usr/share/magicrescue/recipes"
+      local recipe_args=()
+      # wallet + pictures + documents — skip noise (elf, empathy, mbox, perl)
+      for recipe in jpeg-jfif jpeg-exif png sqlite zip rar gzip msoffice mp3-id3v1 mp3-id3v2 avi; do
+        [[ -f "$recipes_dir/$recipe" ]] && recipe_args+=(-r "$recipes_dir/$recipe")
+      done
+      if [[ ${#recipe_args[@]} -eq 0 ]]; then
+        printf 'No magicrescue recipes found in %s\n' "$recipes_dir" | tee "$log_path"
+        status="failed"
+        notes="no recipes found in $recipes_dir"
+        return 1
+      fi
+      printf 'Using recipes: %s\n' "${recipe_args[*]}" | tee "$log_path"
+      { magicrescue "${recipe_args[@]}" -d "$tool_dir" "$image"; } 2>&1 | tee -a "$log_path" || status="partial"
+      ;;
     photorec)
       if [[ ! -t 0 ]]; then
         printf 'PhotoRec requires an interactive terminal in the current implementation.\n' | tee "$log_path"
@@ -84,7 +105,7 @@ run_one() {
 }
 
 case "$method" in
-  all) for tool in foremost scalpel photorec; do run_one "$tool"; done ;;
-  foremost|scalpel|photorec) run_one "$method" ;;
+  all) for tool in foremost scalpel recoverjpeg magicrescue photorec; do run_one "$tool"; done ;;
+  foremost|scalpel|recoverjpeg|magicrescue|photorec) run_one "$method" ;;
   *) die "unsupported method: $method" ;;
 esac
