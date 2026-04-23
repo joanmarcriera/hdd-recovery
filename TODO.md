@@ -23,14 +23,14 @@ Future improvements roughly ordered by impact.
 
 ### Additional carving / recovery tools
 
-| Tool | Purpose |
-|---|---|
-| `testdisk` / `photorec` (extended profiles) | testdisk can rebuild partition tables and recover whole filesystem structures — worth adding as a guided stage before carving |
-| `recoverjpeg` | Fast JPEG-only carver, lighter than foremost/scalpel for picture-focused runs |
-| `magicrescue` | Recipe-based carver with good coverage for office docs, audio, and compressed archives |
-| `binwalk` | Extracts compound/firmware images; useful when a disk contains embedded archives or flash dumps |
-| `safecopy` | Alternative to ddrescue for disks that ddrescue handles poorly (different retry strategy) |
-| `ddrescueview` | GUI map visualiser — not needed in TUI but useful for a quick visual of where bad sectors cluster |
+| Tool | Status | Purpose |
+|---|---|---|
+| `testdisk` / `photorec` (extended profiles) | pending | testdisk can rebuild partition tables and recover whole filesystem structures — worth adding as a guided stage before carving |
+| `binwalk` | pending | Extracts compound/firmware images; useful when a disk contains embedded archives or flash dumps |
+| `recoverjpeg` | **done** | Fast JPEG-only carver, lighter than foremost/scalpel for picture-focused runs |
+| `magicrescue` | **done** | Recipe-based carver with good coverage for office docs, audio, and compressed archives |
+| `safecopy` | **done** | Alternative to ddrescue for disks that ddrescue handles poorly (different retry strategy) |
+| `ddrescueview` | **done** | Map viewer via `image-mapview.sh`; TUI stage added |
 
 ### Enrichment and deduplication
 
@@ -54,13 +54,13 @@ Future improvements roughly ordered by impact.
 
 ### Filesystem-specific
 
-| Tool | Purpose |
-|---|---|
-| `ntfsundelete` (ntfs-3g) | More targeted than generic carving for NTFS deleted files |
-| `fatcat` | FAT filesystem explorer and deleted-file recovery |
-| `ext4magic` | More thorough than `extundelete` for some ext3/ext4 edge cases (already in list) |
-| `xfs_undelete` | If any source disks are XFS |
-| `btrfs restore` | If any source disks are Btrfs |
+| Tool | Status | Purpose |
+|---|---|---|
+| `ntfsundelete` (ntfs-3g) | **done** | Targeted NTFS deleted-file recovery via `image-ntfs-recover.sh` |
+| `fatcat` | **done** | FAT/exFAT explorer and deleted-file recovery via `image-fat-recover.sh` |
+| `ext4magic` | **done** | More thorough than `extundelete` for some ext3/ext4 edge cases |
+| `xfs_undelete` | **done** | XFS deleted-file recovery via `image-xfs-recover.sh` |
+| `btrfs restore` | **done** | Btrfs file recovery via `image-btrfs-recover.sh` |
 
 ---
 
@@ -71,13 +71,13 @@ Future improvements roughly ordered by impact.
 - **Duplicate image detection** — perceptual hash (`pHash` via `imagehash`) across all recovered images to group near-duplicates before export.
 - **Email / contact extraction** — bulk_extractor already pulls email addresses; add a stage that imports `email.txt` hits and cross-references with found `.pst` / `mbox` / `Thunderbird` profile paths.
 - **Cryptocurrency address validation** — after bulk_extractor finds address-like strings, validate checksum and classify by coin type (BTC, ETH, LTC, etc.).
-- **Timeline report** — combine fiwalk inode timestamps with EXIF dates and bulk_extractor network timestamps into a unified timeline CSV/HTML.
+- **Timeline report** — **done** (`bin/image-timeline.sh`); outputs JSON/CSV/table from `scan_runs`, `files`, and `recovered_artifacts`.
 
 ---
 
 ## Infrastructure
 
-- **Remote status page** — simple HTTP server (e.g. `python -m http.server`) serving a generated HTML dashboard, so recovery status is visible from another machine without SSH.
 - **Notification hooks** — send a desktop/phone notification (e.g. via `ntfy.sh` or `gotify`) when a long stage finishes or fails.
-- **Automated backup of SQLite DBs** — periodic `rsync` of `*.analysis.sqlite` to a second location so analysis results survive a destination disk failure.
 - **Schema migration support** — currently `analysis-schema.sql` uses `CREATE TABLE IF NOT EXISTS`; add a `schema_version` table and migration scripts for future column additions.
+- **Automated backup** — **done** (`bin/recovery-backup.sh`); tiered rsync to `/mnt/CryptoBackup/recovery`.
+- **Remote status page** — **done** (`bin/image-serve.sh` / `bin/image-serve.py`); read-only local web UI on port 7788 with dashboard, wallets, pictures, search, artifacts, timeline, and SQL query.
