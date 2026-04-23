@@ -18,9 +18,12 @@ from stages import TOTAL_STAGES
 
 class DashboardScreen(Screen):
     BINDINGS = [
-        Binding("r",      "refresh",    "Refresh"),
-        Binding("enter",  "open_disk",  "Open disk"),
-        Binding("q",      "app.quit",   "Quit"),
+        Binding("r",      "refresh",     "Refresh"),
+        Binding("enter",  "open_disk",   "Open disk"),
+        Binding("n",      "new_disk",    "New disk"),
+        Binding("w",      "web_server",  "Web server"),
+        Binding("k",      "backup",      "Backup"),
+        Binding("q",      "app.quit",    "Quit"),
     ]
 
     CSS = """
@@ -64,11 +67,14 @@ class DashboardScreen(Screen):
         table = self.query_one(DataTable)
         table.clear()
 
+        from screens.webserver import server_pid, server_url
         subtitle = self.query_one("#subtitle", Label)
+        pid = server_pid()
+        web_hint = f"  │  [green]Web UI ●[/green] {server_url()}" if pid else ""
         if not disks:
-            subtitle.update("No disks found. Add a job config under jobs/ or an image under /mnt/recovery16tb/recovery/images/")
+            subtitle.update(f"No disks found — N to add, W web server, K backup{web_hint}")
             return
-        subtitle.update(f"{len(disks)} disk(s) found — Enter to open, R to refresh")
+        subtitle.update(f"{len(disks)} disk(s) — Enter open  N new  W web  K backup{web_hint}")
 
         for i, disk in enumerate(disks):
             done = count_done(disk)
@@ -144,3 +150,15 @@ class DashboardScreen(Screen):
     def action_refresh(self) -> None:
         self.query_one("#subtitle", Label).update("Refreshing…")
         self.load_disks()
+
+    def action_new_disk(self) -> None:
+        from screens.wizard import WizardScreen
+        self.app.push_screen(WizardScreen())
+
+    def action_web_server(self) -> None:
+        from screens.webserver import WebServerScreen
+        self.app.push_screen(WebServerScreen())
+
+    def action_backup(self) -> None:
+        from screens.backup import BackupScreen
+        self.app.push_screen(BackupScreen())

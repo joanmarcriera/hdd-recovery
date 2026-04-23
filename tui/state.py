@@ -15,6 +15,74 @@ from config import (
 )
 from stages import StageDef, STAGES
 
+# ---------------------------------------------------------------------------
+# ddrescue rate-log parsing
+# ---------------------------------------------------------------------------
+
+def parse_rate_log(path: Path) -> Optional[dict]:
+    """
+    Parse the last entry of a ddrescue --log-rates file.
+    Format (whitespace-separated, no units): time_s rate_Bps avg_Bps errors rescued_bytes
+    Returns dict with rescued_bytes, rate_bps, elapsed_s, or None on failure.
+    """
+    try:
+        lines = [
+            ln for ln in path.read_text().splitlines()
+            if ln.strip() and not ln.startswith("#")
+        ]
+        if not lines:
+            return None
+        last = lines[-1].split()
+        if len(last) < 5:
+            return None
+        elapsed_s = float(last[0])
+        rate_bps = float(last[1])
+        rescued_bytes = int(last[4])
+        return {
+            "elapsed_s": elapsed_s,
+            "rate_bps": rate_bps,
+            "rescued_bytes": rescued_bytes,
+        }
+    except Exception:
+        return None
+
+
+def fetch_smart_attrs(dev: str) -> str:
+    """
+    Run smartctl -A on dev and return a compact summary of key attributes.
+    Only read (no self-test). Returns empty string on failure.
+    """
+    if not dev:
+        return ""
+    try:
+        r = subprocess.run(
+            ["smartctl", "-A", dev],
+            capture_output=True, text=True, timeout=8,
+        )
+        attrs_of_interest = {
+            "190": "Temp (190)",
+            "194": "Temp (194)",
+            "5":   "Reallocated",
+            "197": "Pending",
+            "198": "Uncorrectable",
+            "9":   "Power-on h",
+        }
+        results: list[str] = []
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if not parts:
+                continue
+            num = parts[0]
+            if num in attrs_of_interest and len(parts) >= 10:
+                raw = parts[-1]
+                label = attrs_of_interest[num]
+                results.append(f"{label}: {raw}")
+        return "  ".join(results) if results else "(no SMART attrs parsed)"
+    except FileNotFoundError:
+        return "(smartctl not found)"
+    except Exception as exc:
+        return f"(smartctl error: {exc})"
+
 
 # ---------------------------------------------------------------------------
 # Status
@@ -80,6 +148,9 @@ class DiskInfo:
     safecopy_s1_done: bool = False
     safecopy_s2_done: bool = False
     safecopy_s3_done: bool = False
+    # extra fields populated from job conf
+    rate_log_path: Optional[Path] = None
+    source_size_bytes: int = 0
 
     @property
     def display_name(self) -> str:
@@ -150,6 +221,12 @@ def _disk_from_conf(conf_path: Path) -> Optional[DiskInfo]:
     map_file = conf.get("MAP_FILE", "")
     map_path = Path(map_file) if map_file else _find_map(basename)
     db_path = Path(str(image_path) + DB_SUFFIX)
+    rate_log_str = conf.get("RATE_LOG", "")
+    rate_log_path = Path(rate_log_str) if rate_log_str else LOG_ROOT / f"{basename}.rates.log"
+    try:
+        source_size_bytes = int(conf.get("SOURCE_SIZE_BYTES", "0") or "0")
+    except ValueError:
+        source_size_bytes = 0
     d = DiskInfo(
         conf_path=conf_path,
         basename=basename,
@@ -161,6 +238,8 @@ def _disk_from_conf(conf_path: Path) -> Optional[DiskInfo]:
         map_path=map_path,
         db_path=db_path,
         export_root=EXPORT_ROOT / basename,
+        rate_log_path=rate_log_path,
+        source_size_bytes=source_size_bytes,
     )
     _populate(d)
     return d
@@ -187,6 +266,10 @@ def _populate(d: DiskInfo) -> None:
     d.safecopy_s1_done = (LOG_ROOT / f"{d.basename}-safecopy-stage1.done").exists()
     d.safecopy_s2_done = (LOG_ROOT / f"{d.basename}-safecopy-stage2.done").exists()
     d.safecopy_s3_done = (LOG_ROOT / f"{d.basename}-safecopy-stage3.done").exists()
+    # default rate log path if not already set from conf
+    if not d.rate_log_path:
+        candidate = LOG_ROOT / f"{d.basename}.rates.log"
+        d.rate_log_path = candidate if candidate.exists() else candidate
 
 
 # ---------------------------------------------------------------------------
