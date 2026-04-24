@@ -1,0 +1,51 @@
+services:
+  hdd-forensics:
+    image: ${DOCKERHUB_USER:-joanmarcriera}/hdd-forensics:latest
+    container_name: hdd-forensics
+    hostname: hdd-forensics
+    restart: unless-stopped
+
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+
+    ports:
+      # Browser terminal (ttyd) — open in any browser
+      - "${TTYD_PORT:-7681}:7681"
+      # Supervisor health/status API — used by TrueNAS health probe
+      - "${HEALTH_PORT:-8080}:8080"
+
+    environment:
+      # REQUIRED: password for the browser terminal
+      TTYD_PASSWORD: "${TTYD_PASSWORD:?TTYD_PASSWORD is required}"
+
+      # Username for the browser terminal (default: admin)
+      TTYD_USER: "${TTYD_USER:-admin}"
+
+      # Command the terminal runs on each connection.
+      # Default launches the TUI. Change to 'bash' for a plain shell.
+      TTYD_CMD: "${TTYD_CMD:-cd /root/hdd-recovery && exec bin/tui.sh}"
+
+      # Ollama API endpoint (running on the TrueNAS host).
+      # host-gateway resolves to the Docker host IP automatically.
+      OLLAMA_HOST: "${OLLAMA_HOST:-http://host-gateway:11434}"
+
+    extra_hosts:
+      # Allows the container to reach Ollama (or any service) on the TrueNAS host.
+      - "host-gateway:host-gateway"
+
+    volumes:
+      # Recovery data root: disk images, exports, logs, SQLite databases.
+      # Map your ZFS dataset here. Inside the container this is always
+      # /mnt/recovery16tb regardless of the host path.
+      - "${DATA_ROOT:-/mnt/BigDisk/CryptoBackup}:/mnt/recovery16tb:rw"
+
+      # Optional: persist per-disk ddrescue job configs across container restarts.
+      # - "${JOBS_DIR:-/mnt/BigDisk/CryptoBackup/jobs}:/root/hdd-recovery/jobs:rw"
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

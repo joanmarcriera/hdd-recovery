@@ -1,269 +1,334 @@
-# hdd-recovery
+# hdd-forensics
 
-A guided disk-recovery workspace for imaging old and failing HDDs and extracting
-files, pictures, and wallet artifacts from the resulting images.
+[![Docker Pulls](https://img.shields.io/docker/pulls/joanmarcriera/hdd-forensics)](https://hub.docker.com/r/joanmarcriera/hdd-forensics)
+[![Docker Image Size](https://img.shields.io/docker/image-size/joanmarcriera/hdd-forensics/latest)](https://hub.docker.com/r/joanmarcriera/hdd-forensics)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Everything runs on a local Kali Linux machine with a 16 TB destination disk.
-All analysis is done on image files — the original source disk is never written to
-or mounted read-write.
+**A self-contained Docker container for hard-disk image forensics, focused on recovering Bitcoin and cryptocurrency wallet artifacts.**
 
----
-
-## Screenshots
-
-### Dashboard — all disks at a glance
-
-![Dashboard](docs/screenshot-dashboard.svg)
-
-### Disk detail — 22-stage guided checklist
-
-![Disk detail](docs/screenshot-disk-detail.svg)
-
-### Confirm dialog — shows the exact command before running
-
-![Confirm](docs/screenshot-confirm.svg)
+Designed for [TrueNAS SCALE](https://www.truenas.com/truenas-scale/) but works on any Docker host. All analysis runs against `.img` disk image files — original hardware is never touched after imaging.
 
 ---
 
-## Hardware layout
+## What it does
 
-| Role | Device | Notes |
-|---|---|---|
-| OS | `/dev/sda` | Samsung SSD, do not touch |
-| Destination | `/dev/sdc` → `/mnt/recovery16tb` | 16 TB Toshiba, ext4, label `RECOVERY16TB` |
-| Source | next available SATA port | identified by model/serial/by-path before each run |
-
-`/dev/sdb` is a ZFS member — never format, mount, or alter it.
-
----
-
-## Safety rules
-
-- Never write to a source disk
-- Never mount a source disk read-write
-- Never mount a source disk before imaging without a specific reason
-- If disk identity is ambiguous — stop and verify
-- Never run SMART self-tests during imaging
-- Never delete, compact, or deduplicate recovery outputs before human review
-- Never start a second DB-writing stage while one is already running
+- Catalogs every file on a disk image (live, deleted, and orphaned) using **The Sleuth Kit / fiwalk**
+- Scores files for crypto-wallet relevance: `wallet.dat`, Electrum databases, Ethereum keystores, known wallet directory structures
+- Runs **bulk_extractor** to find Bitcoin addresses, raw private keys, AES keys, and other artifacts directly in the raw image data
+- Carves deleted files with **foremost**, **scalpel**, **recoverjpeg**, and **magicrescue**
+- Recovers deleted ext3/4 files via **extundelete** and **ext4magic**
+- OCRs all recovered images with **Tesseract** and flags sequences of BIP-39 seed words
+- Keeps a per-image **SQLite** catalog of every stage: what ran, when, what it found
+- Exposes the full interactive **TUI** (Python Textual) via a browser-accessible terminal — no SSH required
+- Integrates with a local **Ollama** instance for LLM-assisted analysis
 
 ---
 
-## Quick start
+## Architecture
 
-### 1. Image a disk
-
-```bash
-# Copy and fill in the job config
-cp bin/ddrescue-job-template.conf jobs/<name>.conf
-# fill SOURCE_DEV, SOURCE_BY_PATH, SOURCE_MODEL, SOURCE_SERIAL, SOURCE_SIZE_BYTES, BASENAME
-
-# Preview (nothing written)
-bin/ddrescue-run.sh jobs/<name>.conf plan
-bin/ddrescue-run.sh jobs/<name>.conf first
-
-# Run
-bin/ddrescue-run.sh jobs/<name>.conf first --run
-
-# Check coverage
-bin/ddrescue-status.sh /mnt/recovery16tb/recovery/logs/<basename>.map
-
-# Retry passes if unread areas remain
-bin/ddrescue-run.sh jobs/<name>.conf retry --run
-bin/ddrescue-run.sh jobs/<name>.conf reverse --run
+```
+┌─────────────────────────────────────┐       rsync / SSH        ┌─────────────────────────────────────────────┐
+│   Imaging machine (Optiplex/Kali)   │ ────────────────────────► │   TrueNAS SCALE (12 CPU / 96 GB / RTX 4060) │
+│                                     │                           │                                             │
+│   • ddrescue  →  disk.img           │                           │   ZFS pool                                  │
+│   • image-analysis-init.sh          │                           │   └── /mnt/BigDisk/CryptoBackup/            │
+│   • image-structure-scan.sh         │                           │        ├── recovery/images/*.img            │
+│   • send-image-to-truenas.sh        │                           │        ├── recovery/exports/<name>/         │
+│                                     │                           │        └── recovery/logs/                   │
+│   Plug in the next disk  ──────────►│                           │                                             │
+└─────────────────────────────────────┘                           │   Docker container: hdd-forensics           │
+                                                                   │   ├── full forensics toolchain             │
+                                                                   │   ├── Textual TUI (Python)                 │
+                                                                   │   ├── ttyd       →  :7681  (browser)       │
+                                                                   │   ├── supervisor →  :8080  (health API)    │
+                                                                   │   └── Ollama client (via host-gateway)     │
+                                                                   └─────────────────────────────────────────────┘
 ```
 
-### 2. Analyse the image
+The imaging machine does one thing: run `ddrescue` to capture a raw image, then `rsync` it to TrueNAS. TrueNAS runs the Docker container and handles all analysis while the imaging machine moves on to the next disk.
+
+---
+
+## Quick start on TrueNAS SCALE
+
+### Option A — Custom App (recommended)
+
+1. In the TrueNAS web UI go to **Apps → Discover Apps → Custom App**.
+2. Set the image to `joanmarcriera/hdd-forensics:latest`.
+3. Add environment variables:
+
+   | Variable | Value |
+   |----------|-------|
+   | `TTYD_PASSWORD` | your chosen password (required) |
+   | `OLLAMA_HOST` | `http://host-gateway:11434` |
+
+4. Under **Storage**, add a host path volume:
+   - **Host path:** `/mnt/BigDisk/CryptoBackup`
+   - **Mount path:** `/mnt/recovery16tb`
+
+5. Under **Networking**, add port forwards:
+   - Container port `7681` → Host port `7681` (browser terminal)
+   - Container port `8080` → Host port `8080` (health check)
+
+6. Click **Install**. After about a minute, open `http://truenas-ip:7681` in your browser. Log in with username `admin` and the password you set.
+
+TrueNAS automatically uses `GET /health` on port `8080` as the app health probe once the port is mapped.
+
+### Option B — docker compose
 
 ```bash
-IMAGE=/mnt/recovery16tb/recovery/images/<basename>.img
+# On TrueNAS, open a shell:
+git clone https://github.com/joanmarcriera/hdd-forensics.git /mnt/BigDisk/hdd-forensics
+cd /mnt/BigDisk/hdd-forensics/docker
+
+cp .env.example .env
+# Edit .env: set TTYD_PASSWORD and verify DATA_ROOT
+
+docker compose --env-file .env pull
+docker compose --env-file .env up -d
+```
+
+Then open `http://truenas-ip:7681`.
+
+### Option C — docker run (one-liner)
+
+```bash
+docker run -d \
+  --name hdd-forensics \
+  --restart unless-stopped \
+  -p 7681:7681 -p 8080:8080 \
+  -e TTYD_PASSWORD=yourpassword \
+  -e OLLAMA_HOST=http://host-gateway:11434 \
+  --add-host host-gateway:host-gateway \
+  -v /mnt/BigDisk/CryptoBackup:/mnt/recovery16tb \
+  joanmarcriera/hdd-forensics:latest
+```
+
+---
+
+## Sending images from the imaging machine
+
+After `ddrescue` finishes on the Kali/Linux imaging machine, initialize and transfer:
+
+```bash
+# 1. Initialize the analysis database and scan partition structure
+IMAGE=/path/to/disk.img
+bin/image-analysis-init.sh "$IMAGE"
+bin/image-structure-scan.sh "${IMAGE}.analysis.sqlite"
+
+# 2. Transfer to TrueNAS (SSH key auth required)
+#    Usage: send-image-to-truenas.sh <image> <truenas-host> [<remote-data-root>]
+bin/send-image-to-truenas.sh "$IMAGE" truenas.local /mnt/BigDisk/CryptoBackup
+```
+
+The script:
+- Checks ddrescue map coverage and warns if it is below 95%
+- Transfers the image file via `rsync --partial` (safely restartable)
+- Transfers the SQLite database and ddrescue log files
+- Transfers any existing export outputs
+- Prints the exact `docker exec` command to start analysis on TrueNAS
+
+---
+
+## Full analysis workflow
+
+All commands run **inside the container** — either via the browser terminal at `http://truenas-ip:7681` or `docker exec -it hdd-forensics bash`.
+
+```bash
+IMAGE=/mnt/recovery16tb/recovery/images/disk.img
 DB=${IMAGE}.analysis.sqlite
 
-# Fast metadata-first path (5–20 min)
-bin/image-process.sh $IMAGE
+# ── Fast path (metadata-first, runs in minutes) ──────────────────────────────
+bin/image-index-tsk.sh $DB          # filesystem inventory via fiwalk (all files, deleted)
+bin/image-detect-wallets.sh $DB     # score files for wallet relevance
+bin/image-detect-pictures.sh $DB    # score files for picture relevance
 
-# Query results
+# ── Heavy stages (run overnight or in parallel) ───────────────────────────────
+bin/image-bulk-extractor.sh $DB --scope raw       # scan raw image bytes
+bin/image-ext-recover.sh $DB                      # ext3/4 deleted file recovery
+bin/image-carve.sh $DB --method foremost          # file carving
+bin/image-carve.sh $DB --method scalpel
+bin/image-carve.sh $DB --method recoverjpeg
+bin/image-carve.sh $DB --method magicrescue
+bin/image-bulk-extractor.sh $DB --scope recovered # scan carved corpus
+bin/image-ntfs-artifact-summary.sh $DB            # Windows/NTFS artifact summary
+
+# ── OCR seed phrase detection ─────────────────────────────────────────────────
+bin/image-ocr-seed-scan.py $DB      # OCR all recovered images, flag BIP-39 seeds
+
+# ── Query results ─────────────────────────────────────────────────────────────
 bin/image-query.sh $DB summary
 bin/image-query.sh $DB wallets
 bin/image-query.sh $DB pictures
-
-# Heavy stages (hours each — run as needed)
-bin/image-bulk-extractor.sh $DB --scope raw
-bin/image-ext-recover.sh $DB
-bin/image-carve.sh $DB --method foremost
-bin/image-carve.sh $DB --method scalpel
-bin/image-bulk-extractor.sh $DB --scope recovered
-bin/image-ntfs-artifact-summary.sh $DB
-bin/image-photorec-run.sh $DB --profile broad
 bin/image-report.sh $DB
 ```
 
-### 3. Use the TUI (recommended)
+**Or run everything at once (unattended):**
 
 ```bash
-bin/tui.sh
+bin/image-bulk-discovery-run.sh /mnt/recovery16tb/recovery/images/disk.img
 ```
 
-The TUI discovers all known disks automatically, shows where each one is in the
-22-stage workflow, and guides you through each step with an explanation and a
-confirmation before anything runs.
+`image-bulk-discovery-run.sh` accepts `--map <ddrescue-map>` and `--with-photorec` flags.
+
+### Stage ordering rule
+
+Always run the metadata-first path (TSK index → wallet/picture detection) before the heavy stages. Never start a second DB-writing stage while one is already running.
 
 ---
 
-## TUI
+## Environment variables
 
-Built with [Textual](https://textual.textualize.io/) and managed with
-[uv](https://github.com/astral-sh/uv). Dependencies install automatically on
-first run.
-
-### Key bindings
-
-**Dashboard**
-
-| Key | Action |
-|---|---|
-| `Enter` | Open disk detail |
-| `R` | Refresh disk list |
-| `Q` | Quit |
-
-**Disk detail**
-
-| Key | Action |
-|---|---|
-| `Enter` | Show confirm dialog for selected stage |
-| `L` | View log of selected stage |
-| `T` | Jump to log of whichever stage is currently running |
-| `R` | Refresh stage statuses |
-| `B` | Back to dashboard |
-| `Q` | Quit |
-
-**Confirm dialog**
-
-| Key | Action |
-|---|---|
-| `Y` | Run the command |
-| `N` / `Esc` | Cancel |
-
-### System bar
-
-The bottom bar updates every 2 seconds:
-
-```
-CPU ▁▃▅▆  23%  │  sdc ↓204 ↑0.0 MB/s  │  ⟳ photorec-broad  6h 02m  [T] tail log
-```
-
-- CPU sparkline + current % (green → yellow → red at 50%/80%)
-- Destination disk (`sdc`) read/write MB/s from `/proc/diskstats`
-- Running recovery stage name and elapsed time from `scan_runs` DB
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TTYD_PASSWORD` | **yes** | — | Password for the browser terminal |
+| `TTYD_USER` | no | `admin` | Username for the browser terminal |
+| `TTYD_PORT` | no | `7681` | Container port for the browser terminal |
+| `TTYD_CMD` | no | `cd /root/hdd-recovery && exec bin/tui.sh` | Command the terminal runs on each new connection |
+| `HEALTH_PORT` | no | `8080` | Container port for the health/status API |
+| `OLLAMA_HOST` | no | `http://host-gateway:11434` | Ollama API URL (running on the Docker host) |
+| `DATA_ROOT` | no | `/mnt/BigDisk/CryptoBackup` | Host path mapped to `/mnt/recovery16tb` in docker-compose |
 
 ---
 
-## Directory layout
+## Included tools
+
+| Category | Tools |
+|----------|-------|
+| **Disk imaging** | `ddrescue`, `dc3dd` |
+| **Filesystem forensics** | `sleuthkit` (fiwalk, mmls, img_stat), `testdisk`, `photorec` |
+| **File carving** | `foremost`, `scalpel`, `recoverjpeg`, `magicrescue` |
+| **Raw data extraction** | `bulk_extractor` |
+| **Deleted file recovery** | `extundelete`, `ext4magic` |
+| **Binary analysis** | `binwalk` |
+| **Metadata** | `exiftool`, `file`, `sqlite3`, `db5.3-util` (BerkeleyDB / `wallet.dat`) |
+| **OCR** | `tesseract-ocr` + English language data + BIP-39 wordlist |
+| **Full-text index** | `recoll` (opt-in via `ENABLE_RECOLL=1`) |
+| **Terminal UI** | Python Textual app, served via `ttyd` |
+| **Process manager** | Go supervisor (manages ttyd, serves health API) |
+
+---
+
+## Health API
+
+The Go supervisor exposes a small HTTP API on port `8080` (configurable via `HEALTH_PORT`):
 
 ```
-bin/                     acquisition and analysis scripts
-  ddrescue-run.sh        imaging wrapper (preview + all passes)
-  ddrescue-status.sh     map coverage summary
-  image-process.sh       fast metadata-first analysis pipeline
-  image-analysis-init.sh create/refresh per-image SQLite DB
-  image-structure-scan.sh fdisk/parted/mmls/blkid scan
-  image-index-tsk.sh     filesystem-aware inventory via fiwalk
-  image-detect-wallets.sh score files for wallet candidates
-  image-detect-pictures.sh score files for picture candidates
-  image-ext-recover.sh   ext3/ext4 deleted-file recovery
-  image-bulk-extractor.sh bulk_extractor on raw image or corpus
-  image-carve.sh         foremost or scalpel carving
-  image-photorec-run.sh  unattended PhotoRec (/cmd mode)
-  image-ntfs-artifact-summary.sh  Windows traces from bulk_extractor
-  image-index-recoll.sh  full-text Recoll index
-  image-query.sh         read-only DB queries
-  image-export.sh        copy a specific file out
-  image-report.sh        generate summary report
-  tui.sh                 launch the TUI
+GET /health
+  200  {"ok":true}
+  503  {"ok":false,"error":"ttyd not running"}
 
-lib/
-  common.sh              shared bash library (logging, DB helpers, artifact registration)
+GET /status
+  200  {
+         "ok":          true,
+         "ttyd_up":     true,
+         "ttyd_pid":    12345,
+         "restarts":    0,
+         "started_at":  "2026-04-24T09:00:00Z",
+         "uptime_s":    3600,
+         "ollama_host": "http://host-gateway:11434",
+         "ollama_ok":   true,
+         "ollama_msg":  "reachable"
+       }
+```
 
-sql/
-  analysis-schema.sql    SQLite schema (idempotent CREATE IF NOT EXISTS)
+`GET /` redirects to `/health` (HTTP 302) so TrueNAS health probes that hit the root path also work.
 
-config/
-  analysis-pipeline.env  base paths and feature flags
-  keywords/              wallet and interest keyword lists
-  scalpel/               tuned scalpel config
-  photorec/              PhotoRec option samples
+The supervisor restarts ttyd automatically on crash (up to 20 times, with a 5-second backoff). It tests Ollama connectivity at startup and reports it in `/status`.
 
-jobs/                    per-disk ddrescue job configs (one per source disk)
-manifests/               source disk manifests (YAML)
+---
 
-tui/                     interactive TUI (Python + Textual)
-  main.py                app entry point
-  config.py              path/env loading
-  stages.py              22-stage workflow definitions
-  state.py               disk discovery and stage-status derivation
-  executor.py            command building and async subprocess launch
-  monitor.py             SystemBar widget (CPU/IO/process timer)
-  screens/
-    dashboard.py         multi-disk overview
-    disk_detail.py       per-disk 22-stage checklist
-    confirm.py           command preview and Y/N confirmation
-    log_viewer.py        live output streaming and log tail
+## Ollama integration
 
-docs/                    screenshots
+If [Ollama](https://ollama.com) is running on the TrueNAS host, the container reaches it via `http://host-gateway:11434` — Docker's built-in alias for the host IP. This is already the default value of `OLLAMA_HOST`.
 
-/mnt/recovery16tb/recovery/
-  images/                raw disk images (*.img) and per-image SQLite DBs
-  logs/                  ddrescue map files, rate logs, event logs
-  exports/<basename>/    per-image analysis outputs
-    structure/           fdisk/parted/mmls outputs
-    recovered/           carving and recovery outputs by method
-    indexes/             bulk_extractor feature files
-    logs/                per-stage log files
-    reports/             generated reports
-  manifests/             source disk manifests
+The supervisor tests Ollama at startup and reports the result in `GET /status`. LLM-assisted analysis (vision models for ambiguous seed-phrase images, text summarization) is available as an opt-in stage.
+
+---
+
+## Pushing updates to Docker Hub
+
+```bash
+# Build and tag
+docker build -f docker/Dockerfile -t joanmarcriera/hdd-forensics:latest .
+
+# Optional: tag a version
+docker tag joanmarcriera/hdd-forensics:latest joanmarcriera/hdd-forensics:1.0.0
+
+# Push
+docker login
+docker push joanmarcriera/hdd-forensics:latest
+docker push joanmarcriera/hdd-forensics:1.0.0
+```
+
+For multi-architecture builds (amd64 + arm64):
+
+```bash
+docker buildx create --use --name multiarch
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -f docker/Dockerfile \
+  -t joanmarcriera/hdd-forensics:latest \
+  --push .
 ```
 
 ---
 
-## Per-image SQLite database
+## Data layout
 
-One database per image, stored beside the image as `<image>.analysis.sqlite`.
+The container expects the following structure inside the mounted volume (`/mnt/recovery16tb`). This layout is created automatically when you run `bin/image-analysis-init.sh`.
+
+```
+/mnt/recovery16tb/
+└── recovery/
+    ├── images/                 disk image files (*.img) and SQLite databases
+    │   ├── disk.img
+    │   └── disk.img.analysis.sqlite
+    ├── exports/
+    │   └── <image-name>/       per-image analysis outputs
+    │       ├── structure/      fdisk / parted / mmls / blkid outputs
+    │       ├── recovered/      carved and recovered files by method
+    │       ├── indexes/        bulk_extractor output, TSK index
+    │       ├── hits/           wallet candidates, OCR seed hits
+    │       ├── logs/           per-stage log files
+    │       └── reports/        generated summary reports
+    └── logs/                   ddrescue map files and rate logs
+```
+
+Each image's SQLite database lives beside the image file as `<image>.analysis.sqlite` and contains:
 
 | Table | Contents |
-|---|---|
+|-------|----------|
 | `image_info` | image path, SHA256, size, ddrescue map path, export root |
 | `scan_runs` | one row per stage execution: status, timestamps, log path, output dir |
 | `partitions` / `filesystems` | structure scan results |
-| `files` | filesystem-aware inventory from fiwalk (paths, inodes, timestamps, deleted flag) |
-| `wallet_candidates` | scored wallet hits from the files inventory |
-| `picture_candidates` | scored picture hits from the files inventory |
-| `recovered_artifacts` | carved/recovered files with SHA256 and mime type |
-| `bulk_extractor_hits` | imported feature-file rows (capped per scope) |
-| `exports` / `notes` | exported files and operator notes |
+| `files` | full filesystem inventory from fiwalk (paths, inodes, timestamps, deleted flag) |
+| `wallet_candidates` | scored wallet hits |
+| `picture_candidates` | scored picture hits |
+| `recovered_artifacts` | carved/recovered files with SHA256 and MIME type |
+| `bulk_extractor_hits` | imported feature-file rows (capped at 5000 per scope) |
+| `notes` | timestamped operator notes |
+| `exports` | exported files |
 
 ---
 
-## Monitoring
+## Security notes
 
-```bash
-# Passive tmux monitor (background windows for logs, SMART, mount status)
-/root/start-recovery-monitor.sh
-tmux attach -t recovery-monitor
-
-# Or just use the TUI — it reads the same data sources directly
-bin/tui.sh
-```
+- The browser terminal requires a password set via `TTYD_PASSWORD`. Use a strong password if TrueNAS is reachable from outside your LAN.
+- Consider a reverse proxy with TLS in front of port `7681` for remote access. TrueNAS has a built-in Nginx reverse proxy that can be configured per app.
+- The container does not require `--privileged` or any special Linux capabilities. It reads image files exclusively via the volume mount.
+- The health API on port `8080` is unauthenticated. Restrict it to your LAN or bind it to a local interface if needed.
 
 ---
 
-## Known caveats
+## Contributing
 
-- `bulk_extractor --scope recovered` can spin at 100% CPU during finalization with
-  no output growth — monitor `du -sh` on the output dir; treat long stalls as partial
-- PhotoRec uses `/cmd` for unattended operation on this build
-- NTFS/Windows artifacts can appear in raw `bulk_extractor` output even when the
-  current filesystem is ext4 — check `image-ntfs-artifact-summary.sh` output
-- eMule/aMule `.part.met.seeds` files contain peer-source metadata, not wallet seeds
-- Wallet keyword hits are candidates only — always verify by content
-- Carving produces many duplicates and false positives — keep method provenance,
-  deduplicate only after human review
+Issues and pull requests are welcome. This project is actively used for real data recovery work — bug reports with reproduction steps are especially valued.
+
+All analysis runs on image files. The original source disks are never written to or mounted read-write.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -30,9 +30,23 @@ Ordered preflight before first imaging run:
    - Use a resumable ddrescue log file from the start.
    - Save image files with stable, human-readable names based on date, model, serial, and source path.
 
-7. After imaging completes, work from the image file only.
-   - Hash the image if desired.
-   - Perform filesystem or partition analysis on the image, not on the original disk.
+7. After imaging completes, run the two fast Optiplex-side analysis stages.
+   - `bin/image-analysis-init.sh <image> [--map <mapfile>]` — creates the SQLite DB and export tree.
+   - `bin/image-structure-scan.sh <db>` — records partition table and filesystem geometry.
+   - These are lightweight and required before the transfer so the DB travels with the image.
+
+8. Transfer the image to TrueNAS for all heavy analysis.
+   - `bin/send-image-to-truenas.sh <image> <truenas-host>`
+   - This rsyncs the image file, SQLite database, ddrescue logs, and any existing export outputs.
+   - Default remote root: `/mnt/BigDisk/CryptoBackup` on TrueNAS.
+   - Script warns if ddrescue coverage is below 95% and prompts before continuing.
+   - After transfer, the script prints the exact `docker exec` command to start analysis.
+
+9. Run all remaining analysis stages inside the Docker container on TrueNAS.
+   - Browser terminal: `http://<truenas-ip>:7681` (username: admin, password: TTYD_PASSWORD).
+   - Or run directly: `docker exec -it hdd-forensics bash`
+   - Data path inside container: `/mnt/recovery16tb/recovery/` (same path layout as on Optiplex).
+   - Do not run heavy analysis stages (bulk_extractor, carving, ext recovery, OCR) on the Optiplex.
 
 Recommended naming pattern:
 - Image: `YYYYMMDD_<model>_<serial>_<source-dev>.img`

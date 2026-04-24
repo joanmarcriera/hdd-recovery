@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import os
 import signal
+import socket
 import subprocess
 from pathlib import Path
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal
@@ -16,8 +18,18 @@ from config import BIN_DIR
 
 _PID_FILE = Path("/tmp/hdd-recovery-webui.pid")
 _DEFAULT_ROOT = "/mnt/recovery16tb/recovery"
-_DEFAULT_HOST = "127.0.0.1"
+_DEFAULT_HOST = "0.0.0.0"
 _DEFAULT_PORT = "7788"
+
+
+def get_local_ip() -> str:
+    """Return the machine's primary LAN IP for display (not the bind address)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
 
 
 def server_pid() -> int | None:
@@ -33,6 +45,15 @@ def server_pid() -> int | None:
 def server_url(host: str = _DEFAULT_HOST, port: str = _DEFAULT_PORT) -> str:
     h = f"[{host}]" if ":" in host else host
     return f"http://{h}:{port}/"
+
+
+def display_url(bind_host: str, port: str) -> str:
+    """URL to show in the TUI — uses the real LAN IP even when bound to 0.0.0.0."""
+    if bind_host in ("0.0.0.0", ""):
+        host = get_local_ip()
+    else:
+        host = bind_host
+    return server_url(host, port)
 
 
 def start_server(host: str, port: str, root: str) -> int:
@@ -85,7 +106,7 @@ class WebServerScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Label("[bold]Web UI Server[/bold] — read-only dashboard on localhost")
+        yield Label("[bold]Web UI Server[/bold] — read-only dashboard accessible on LAN")
         yield Static("", id="status")
         with Horizontal(classes="row"):
             yield Label("Host", classes="lbl")
@@ -111,18 +132,20 @@ class WebServerScreen(Screen):
         port = self.query_one("#port", Input).value.strip()
         status = self.query_one("#status", Static)
         if pid:
-            url = server_url(host, port)
-            status.update(
-                f"[green]● Running[/green]  PID {pid}\n"
-                f"URL: [link={url}]{url}[/link]  (survives TUI exit)"
-            )
+            url = display_url(host, port)
+            content = Text()
+            content.append("● Running", style="green")
+            content.append(f"  PID {pid}\nURL: ")
+            content.append(url, style=f"link {url}")
+            content.append("  (survives TUI exit)")
+            status.update(content)
         else:
             status.update("[dim]○ Stopped[/dim]")
 
         warn = self.query_one("#lan-warn", Static)
         if host not in ("127.0.0.1", "::1", "localhost"):
             warn.update(
-                "⚠ Non-loopback host — the analysis DB and SQL endpoint will be "
+                "⚠ Listening on LAN — the analysis DB and SQL endpoint will be "
                 "accessible to other hosts on the local network."
             )
         else:
@@ -146,7 +169,7 @@ class WebServerScreen(Screen):
             try:
                 new_pid = start_server(host, port, root)
                 self.app.notify(
-                    f"Started (PID {new_pid})\n{server_url(host, port)}",
+                    f"Started (PID {new_pid})\n{display_url(host, port)}",
                     severity="information",
                 )
             except Exception as exc:

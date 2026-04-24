@@ -65,6 +65,16 @@ Recommended use:
    - `ddrescue-run.sh /root/hdd-recovery/jobs/<jobname>.conf reverse --run`
    - `ddrescue-run.sh /root/hdd-recovery/jobs/<jobname>.conf retrim --run`
 
+7. Initialize the analysis database and scan structure (on the Optiplex, before transfer):
+   - `bin/image-analysis-init.sh /mnt/recovery16tb/recovery/images/<basename>.img --map /mnt/recovery16tb/recovery/logs/<basename>.map`
+   - `bin/image-structure-scan.sh /mnt/recovery16tb/recovery/images/<basename>.img.analysis.sqlite`
+
+8. Transfer the image to TrueNAS for all heavy analysis:
+   - `bin/send-image-to-truenas.sh /mnt/recovery16tb/recovery/images/<basename>.img <truenas-host>`
+   - This rsyncs the image, SQLite database, ddrescue logs, and any existing export outputs.
+   - After transfer, the script prints the exact `docker exec` command to continue analysis in the container.
+   - All analysis stages beyond `image-structure-scan.sh` run in the Docker container on TrueNAS.
+
 Notes:
 - The runner refuses to proceed if any partition under the source disk appears mounted.
 - The runner defaults to preview mode and requires `--run` for execution.

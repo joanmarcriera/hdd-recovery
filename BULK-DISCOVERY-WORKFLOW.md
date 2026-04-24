@@ -5,6 +5,20 @@ yet know what may be on the disk.
 
 This is the "gather everything practical first, review later" path.
 
+## Execution environment
+
+All stages in this workflow run inside the Docker container on TrueNAS SCALE
+(image: `joanmarcriera/hdd-forensics:latest`). The Optiplex (Kali Linux) runs
+only ddrescue, `image-analysis-init.sh`, `image-structure-scan.sh`, and then
+transfers the image with `send-image-to-truenas.sh`.
+
+Access the container on TrueNAS:
+- Browser terminal: `http://<truenas-ip>:7681` (username: admin, password: TTYD_PASSWORD)
+  — the terminal launches the TUI by default; for a plain shell, use `docker exec`
+- Direct shell: `docker exec -it hdd-forensics bash`
+
+Inside the container, all paths use `/mnt/recovery16tb/` (mapped from `/mnt/BigDisk/CryptoBackup` on the TrueNAS host).
+
 ## Principles
 
 - work only from image files, not original source disks
@@ -46,7 +60,14 @@ Use the stages in this order.
    - `image-bulk-extractor.sh <db> --scope recovered`
    - `image-index-recoll.sh <db> --path <recovered-dir>`
 
-8. Query, export, and review.
+8. Run OCR seed phrase scan on recovered images.
+   - `image-ocr-seed-scan.py <db>`
+   - OCRs all recovered images registered in `recovered_artifacts` and scans for BIP-39 seed phrases.
+   - Flags images with >= 6 consecutive BIP-39 words; high-confidence hits (>= 12) go to `notes` table.
+   - Results land in `<export_root>/hits/ocr-seeds/<timestamp>/hits.tsv` and `summary.txt`.
+   - Requires Tesseract and the BIP-39 wordlist at `/usr/local/share/bip39-english.txt` (both present in the container).
+
+9. Query, export, and review.
    - `image-query.sh <db> summary`
    - `image-query.sh <db> wallets`
    - `image-query.sh <db> pictures`
@@ -123,8 +144,9 @@ What this means operationally:
 4. foremost output
 5. scalpel output
 6. recovered-corpus bulk_extractor highlights
-7. Recoll searches
-8. PhotoRec output only if you decide the earlier stages still missed too much
+7. OCR seed scan results (`hits/ocr-seeds/<timestamp>/summary.txt`)
+8. Recoll searches
+9. PhotoRec output only if you decide the earlier stages still missed too much
 
 ## Commands
 
@@ -134,22 +156,28 @@ Fast core path:
 /root/hdd-recovery/bin/image-process.sh /mnt/recovery16tb/recovery/images/<basename>.img
 ```
 
-Full bulk discovery, stage by stage:
+Full bulk discovery, stage by stage (run inside the TrueNAS container):
 
 ```bash
+/root/hdd-recovery/bin/image-index-tsk.sh <db>
+/root/hdd-recovery/bin/image-detect-wallets.sh <db>
+/root/hdd-recovery/bin/image-detect-pictures.sh <db>
 /root/hdd-recovery/bin/image-ext-recover.sh <db>
 /root/hdd-recovery/bin/image-bulk-extractor.sh <db> --scope raw
 /root/hdd-recovery/bin/image-carve.sh <db> --method foremost
 /root/hdd-recovery/bin/image-carve.sh <db> --method scalpel
 /root/hdd-recovery/bin/image-bulk-extractor.sh <db> --scope recovered
+/root/hdd-recovery/bin/image-ocr-seed-scan.py <db>
 /root/hdd-recovery/bin/image-index-recoll.sh <db> --path <recovered-dir>
 /root/hdd-recovery/bin/image-report.sh <db>
 ```
 
-One-shot bulk discovery runner:
+One-shot bulk discovery runner (run inside the TrueNAS container):
 
 ```bash
 /root/hdd-recovery/bin/image-bulk-discovery-run.sh /mnt/recovery16tb/recovery/images/<basename>.img
 ```
+
+Note: the one-shot runner does not invoke `image-ocr-seed-scan.py`. Run it separately after the one-shot completes.
 
 Use this only when you intentionally want the heavy deleted/free-space pipeline.

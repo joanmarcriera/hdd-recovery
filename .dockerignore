@@ -1,0 +1,28 @@
+# Git history
+.git
+.gitignore
+
+# Python caches (excluded from image; TUI deps are pre-installed via uv sync)
+tui/.venv
+tui/__pycache__
+**/__pycache__
+**/*.pyc
+**/*.pyo
+
+# Per-disk job configs are user-specific and must not be baked into the image
+jobs/
+
+# Runtime artefacts that do not belong in the image
+*.log
+*.ses
+photorec.log
+photorec.ses
+recovery-monitor/
+start-recovery-monitor.sh
+install-pi.dev.sh
+pi-codex-cc.sh
+agent-skills/
+
+# TrueNAS / desktop files
+.DS_Store
+Thumbs.db

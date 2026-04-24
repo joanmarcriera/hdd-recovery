@@ -7,6 +7,20 @@ Hitachi run.
 Use this after the raw image exists and you have decided to do broad discovery,
 not just a quick metadata-first review.
 
+## Execution environment
+
+All stages in this runbook run inside the Docker container on TrueNAS SCALE
+(12 CPU, 96 GB RAM, RTX 4060). The Optiplex handles only ddrescue imaging,
+`image-analysis-init.sh`, `image-structure-scan.sh`, and the transfer via
+`send-image-to-truenas.sh`.
+
+Access the container:
+- Browser terminal: `http://<truenas-ip>:7681` (username: admin, password: TTYD_PASSWORD)
+  — the browser terminal launches the TUI by default; for a plain shell, use `docker exec`
+- Direct shell: `docker exec -it hdd-forensics bash`
+
+Data path inside container: `/mnt/recovery16tb/recovery/` (mapped from `/mnt/BigDisk/CryptoBackup` on TrueNAS host).
+
 ## Scope
 
 This runbook covers:
@@ -51,19 +65,29 @@ Use:
 
 ### Manual stage-by-stage heavy path
 
+Run these inside the Docker container on TrueNAS (`docker exec -it hdd-forensics bash`):
+
 ```bash
 DB=/mnt/recovery16tb/recovery/images/<basename>.img.analysis.sqlite
 
+/root/hdd-recovery/bin/image-index-tsk.sh "$DB"
+/root/hdd-recovery/bin/image-detect-wallets.sh "$DB"
+/root/hdd-recovery/bin/image-detect-pictures.sh "$DB"
 /root/hdd-recovery/bin/image-ext-recover.sh "$DB"
 /root/hdd-recovery/bin/image-bulk-extractor.sh "$DB" --scope raw
 /root/hdd-recovery/bin/image-carve.sh "$DB" --method foremost
 /root/hdd-recovery/bin/image-carve.sh "$DB" --method scalpel
 /root/hdd-recovery/bin/image-bulk-extractor.sh "$DB" --scope recovered
+/root/hdd-recovery/bin/image-ocr-seed-scan.py "$DB"
 /root/hdd-recovery/bin/image-index-recoll.sh "$DB" --path "$(sqlite3 -readonly "$DB" 'select export_root || "/recovered" from image_info where id=1;')"
 /root/hdd-recovery/bin/image-ntfs-artifact-summary.sh "$DB"
 /root/hdd-recovery/bin/image-photorec-run.sh "$DB" --profile broad
 /root/hdd-recovery/bin/image-report.sh "$DB"
 ```
+
+Note: `image-ocr-seed-scan.py` reads recovered images from `recovered_artifacts` in the DB.
+Run it after `image-bulk-extractor.sh --scope recovered` so the corpus is fully registered.
+The BIP-39 wordlist at `/usr/local/share/bip39-english.txt` is available inside the container.
 
 ## Re-Run Safety
 
@@ -77,6 +101,7 @@ DB=/mnt/recovery16tb/recovery/images/<basename>.img.analysis.sqlite
 | `image-ntfs-artifact-summary.sh` | Rebuilds a review bundle from raw `bulk_extractor` NTFS/Windows feature files. | Safe and additive enough for review; source feature files are not modified. |
 | `image-photorec-run.sh --profile broad` | Creates a timestamped PhotoRec output directory under `recovered/photorec`. | Safe to run unattended on image copies; expect noisy output and duplicates. |
 | `image-index-recoll.sh` | Rebuilds the Recoll index for the chosen recovered tree. | Safe after recovered outputs are stable. |
+| `image-ocr-seed-scan.py` | Creates a new timestamped output dir under `hits/ocr-seeds/` each run; does not overwrite prior results. | Safe to re-run; each run is independent. |
 | `image-report.sh` / `image-status.sh` | Regenerates reports/status from SQLite. | Safe anytime after DB writers finish. |
 
 ## What Changes For Bigger Or Older Disks
@@ -208,9 +233,10 @@ Review in this order:
 4. `foremost` carve results
 5. `scalpel` carve results
 6. recovered-corpus `bulk_extractor` highlights
-7. Recoll searches
-8. NTFS/Windows artifact summary
-9. PhotoRec output
+7. OCR seed scan results (`hits/ocr-seeds/<timestamp>/summary.txt`)
+8. Recoll searches
+9. NTFS/Windows artifact summary
+10. PhotoRec output
 
 ## Review Priorities
 

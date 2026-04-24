@@ -20,7 +20,16 @@ Goal: recover intact pictures first, then carve for deleted or pathless media.
    - `image-carve.sh <db> --method scalpel`
    - `image-photorec-run.sh <db> --profile broad`
 
-5. Optional enrichment
+5. Run OCR seed phrase scan on recovered images (run in TrueNAS container)
+   - `bin/image-ocr-seed-scan.py <db>`
+   - Run after carving so that carved images are registered in `recovered_artifacts`.
+   - OCRs all recovered images in the DB and scans for runs of BIP-39 words.
+   - Flags any image with >= 6 consecutive BIP-39 words; high-confidence hits (>= 12) are written to `notes`.
+   - BIP-39 wordlist is at `/usr/local/share/bip39-english.txt` inside the container.
+   - Results land in `<export_root>/hits/ocr-seeds/<timestamp>/hits.tsv` and `summary.txt`.
+   - Use `--dir <path>` to scan a specific directory instead of the DB.
+
+6. Optional enrichment
    - run `exiftool` or `identify` on exported or carved images
    - build thumbnails or contact sheets later if needed
 
