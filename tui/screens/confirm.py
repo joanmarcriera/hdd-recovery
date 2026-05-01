@@ -7,8 +7,10 @@ from textual.containers import Center, Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Button, Label, Static
 
-from executor import command_display, has_concurrent_db_writer
-from stages import StageDef
+from rich.markup import escape
+
+from executor import command_display, has_any_live_process
+from stages import StageDef, clean_markup
 from state import DiskInfo, StageStatus, ICON
 
 
@@ -85,9 +87,9 @@ class ConfirmScreen(ModalScreen[bool]):
 
         char, style = ICON[self.current_status]
 
-        # Safety check
-        if stage.requires_db_write:
-            self._blocker = has_concurrent_db_writer(disk, exclude_stage_key=stage.key)
+        # Block if any other substantive process is already running.
+        if not stage.is_view_only and not stage.is_manual:
+            self._blocker = has_any_live_process(disk, exclude_stage_key=stage.key)
 
         with Vertical(id="dialog"):
             yield Label(f"Stage {stage.number}: {stage.name}", id="title")
@@ -98,12 +100,12 @@ class ConfirmScreen(ModalScreen[bool]):
             yield Static("")
 
             # Description
-            yield Static(stage.description, id="description")
+            yield Static(clean_markup(stage.description), id="description")
 
             # Command
             yield Static("[bold]Command to run:[/bold]")
             cmd = command_display(disk, stage)
-            yield Static(cmd, id="command-box")
+            yield Static(escape(cmd), id="command-box")
 
             # Previous runs
             if stage.scan_run_key:
@@ -111,7 +113,7 @@ class ConfirmScreen(ModalScreen[bool]):
                 if runs:
                     latest = runs[-1]
                     ended = latest.ended_at or "still running"
-                    note = f"  note: {latest.notes}" if latest.notes else ""
+                    note = f"  note: {escape(latest.notes)}" if latest.notes else ""
                     prev_text = (
                         f"Previous run: [{'green' if latest.status == 'ok' else 'yellow'}]"
                         f"{latest.status}[/{'green' if latest.status == 'ok' else 'yellow'}]  "
@@ -126,8 +128,8 @@ class ConfirmScreen(ModalScreen[bool]):
             # Blocker
             if self._blocker:
                 yield Static(
-                    f"⛔  Cannot start: [{self._blocker}] is currently writing to the DB. "
-                    f"Wait for it to finish first.",
+                    f"⛔  Cannot start: {escape(self._blocker)} is currently writing to the DB. "
+                    "Wait for it to finish first.",
                     id="blocker",
                 )
 

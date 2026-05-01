@@ -24,11 +24,7 @@ def build_command(disk: DiskInfo, stage: StageDef) -> list[str]:
     }
     script_path = str(BIN_DIR / stage.script)
     args: list[str] = []
-    skip_next = False
     for i, tmpl in enumerate(stage.args_template):
-        if skip_next:
-            skip_next = False
-            continue
         val = tmpl.format(**ctx)
         # Drop "--flag" + empty-value pairs (e.g. "--map" when mapfile unknown)
         if val == "" and tmpl.startswith("{") and i > 0 and stage.args_template[i - 1].startswith("--"):
@@ -78,13 +74,34 @@ async def launch(
 def has_concurrent_db_writer(disk: DiskInfo, exclude_stage_key: str = "") -> Optional[str]:
     """Return the name of a currently-running DB-writing stage, or None."""
     from stages import STAGES
-    from state import get_stage_status, StageStatus, is_process_live
+    from state import is_process_live
 
     for s in STAGES:
         if s.key == exclude_stage_key:
             continue
         if not s.requires_db_write:
             continue
+        if not s.pgrep_pattern:
+            continue
+        if is_process_live(s.pgrep_pattern, disk):
+            return s.name
+    return None
+
+
+def has_any_live_process(disk: DiskInfo, exclude_stage_key: str = "") -> Optional[str]:
+    """Return the name of any currently-running stage process, or None.
+
+    Skips view-only stages (fast read-only commands that never conflict).
+    Used to enforce the rule that only one substantive process runs at a time.
+    """
+    from stages import STAGES
+    from state import is_process_live
+
+    for s in STAGES:
+        if s.key == exclude_stage_key:
+            continue
+        if s.is_view_only:
+            continue  # fast read-only; never a conflict
         if not s.pgrep_pattern:
             continue
         if is_process_live(s.pgrep_pattern, disk):

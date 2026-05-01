@@ -4,6 +4,7 @@ from __future__ import annotations
 import time
 from typing import Optional
 
+from rich.markup import escape
 from rich.text import Text
 from textual import on, work
 from textual.app import ComposeResult
@@ -14,7 +15,7 @@ from textual.widgets import DataTable, Footer, Header, Label, Static
 
 from executor import build_command, command_display, has_concurrent_db_writer
 from monitor import SystemBar
-from stages import STAGES, StageDef, STAGE_BY_KEY
+from stages import STAGES, StageDef, STAGE_BY_KEY, clean_markup
 from state import (
     DiskInfo, StageStatus, ICON,
     count_done, fmt_bytes, get_stage_status, get_stage_note,
@@ -28,6 +29,7 @@ _DDRESCUE_KEYS = frozenset({
 _STAGE_DETAIL_PLACEHOLDER = (
     "[dim]Select a stage to see details.\n\n"
     "  Enter  run / preview\n"
+    "  W      write command to /tmp/hdd_stage_cmd.sh\n"
     "  L      view log of selected stage\n"
     "  T      tail log of currently running stage\n"
     "  N      edit notes for this disk\n"
@@ -104,6 +106,7 @@ class DiskDetailScreen(Screen):
         Binding("l",      "view_log",     "View log"),
         Binding("t",      "tail_running", "Tail active log"),
         Binding("n",      "open_notes",   "Notes"),
+        Binding("w",      "write_cmd",    "Write cmd → /tmp"),
         Binding("q",      "app.quit",     "Quit"),
     ]
 
@@ -130,7 +133,7 @@ class DiskDetailScreen(Screen):
         yield SystemBar(disk=self.disk)
         yield Footer()
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self.sub_title = self.disk.job_name
         table = self.query_one(DataTable)
         table.add_columns("#", "Stage", "Status", "Note", "Runtime")
@@ -248,7 +251,7 @@ class DiskDetailScreen(Screen):
         lines.append("[bold]Command:[/bold]")
         if stage.script:
             cmd = command_display(self.disk, stage)
-            lines.append(f"[dim on default]{cmd}[/dim on default]")
+            lines.append(f"[dim on default]{escape(cmd)}[/dim on default]")
         else:
             lines.append("[dim](manual step — use Enter to open wizard / instructions)[/dim]")
 
@@ -265,22 +268,22 @@ class DiskDetailScreen(Screen):
                         f"  {r.started_at[:16]} → {ended[:16]}"
                     )
                     if r.notes:
-                        lines.append(f"  [dim]{r.notes}[/dim]")
+                        lines.append(f"  [dim]{escape(r.notes)}[/dim]")
                     if r.log_path:
-                        lines.append(f"  log: [dim]{r.log_path}[/dim]")
+                        lines.append(f"  log: [dim]{escape(r.log_path)}[/dim]")
 
         latest = self.disk.latest_run(stage.scan_run_key) if stage.scan_run_key else None
         if latest and latest.log_path:
             lines.append("")
-            lines.append(f"[bold]Log:[/bold] {latest.log_path}")
+            lines.append(f"[bold]Log:[/bold] {escape(latest.log_path)}")
         if latest and latest.output_dir:
-            lines.append(f"[bold]Output:[/bold] {latest.output_dir}")
+            lines.append(f"[bold]Output:[/bold] {escape(latest.output_dir)}")
 
         if stage.warning:
             lines.append("")
-            lines.append(f"[bold red]⚠ {stage.warning}[/bold red]")
+            lines.append(f"[bold red]⚠ {escape(stage.warning)}[/bold red]")
 
-        panel.update("\n".join(lines))
+        panel.update(clean_markup("\n".join(lines)))
 
     @on(DataTable.RowSelected)
     def on_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -366,6 +369,28 @@ class DiskDetailScreen(Screen):
     def action_open_notes(self) -> None:
         from screens.notes import NotesScreen
         self.app.push_screen(NotesScreen(self.disk))
+
+    def action_write_cmd(self) -> None:
+        """Write the selected stage's command to /tmp/hdd_stage_cmd.sh."""
+        stage = self._selected_stage()
+        if not stage or not stage.script:
+            self.app.notify("No runnable command for this stage.", severity="warning")
+            return
+        from executor import command_display
+        import os
+        cmd = command_display(self.disk, stage)
+        out_path = "/tmp/hdd_stage_cmd.sh"
+        try:
+            with open(out_path, "w") as f:
+                f.write(f"#!/usr/bin/env bash\n{cmd}\n")
+            os.chmod(out_path, 0o755)
+            self.app.notify(
+                f"Saved to {out_path}\n\nRun in another terminal:\n  bash {out_path}",
+                title=f"Stage {stage.number}: {stage.name}",
+                timeout=10,
+            )
+        except OSError as e:
+            self.app.notify(f"Failed to write {out_path}: {e}", severity="error")
 
     def action_go_back(self) -> None:
         self.app.pop_screen()

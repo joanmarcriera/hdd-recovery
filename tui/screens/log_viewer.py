@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from rich.markup import escape
+
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -68,7 +70,7 @@ class LogViewerScreen(Screen):
         yield Label("", id="status-bar")
         yield Footer()
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self.sub_title = self.stage.name
         log = self.query_one(RichLog)
         if self.log_path:
@@ -80,41 +82,46 @@ class LogViewerScreen(Screen):
     def _tail_log(self, log: RichLog) -> None:
         path = Path(self.log_path)
         if not path.exists():
-            self.app.call_from_thread(log.write, f"[red]Log file not found: {self.log_path}[/red]")
+            self.app.call_from_thread(log.write, f"[red]Log file not found: {escape(str(self.log_path))}[/red]")
             return
         try:
             text = path.read_text(errors="replace")
             self.app.call_from_thread(log.write, text)
             self.app.call_from_thread(
                 self.query_one("#status-bar", Label).update,
-                f"[dim]{self.log_path}  —  read-only  (B/Q to go back)[/dim]",
+                f"[dim]{escape(str(self.log_path))}  —  read-only  (B/Q to go back)[/dim]",
             )
         except Exception as exc:
-            self.app.call_from_thread(log.write, f"[red]Error reading log: {exc}[/red]")
+            self.app.call_from_thread(log.write, f"[red]Error reading log: {escape(str(exc))}[/red]")
 
     @work
     async def _run_stage(self, log: RichLog) -> None:
         from executor import build_command
         cmd = build_command(self.disk, self.stage)
-        log.write(f"[dim]$ {' '.join(cmd)}[/dim]\n")
+        log.write(f"[dim]$ {escape(' '.join(cmd))}[/dim]\n")
 
         status_label = self.query_one("#status-bar", Label)
 
         try:
             self._process = await launch(self.disk, self.stage)
         except Exception as exc:
-            log.write(f"[bold red]Failed to start process: {exc}[/bold red]")
+            log.write(f"[bold red]Failed to start process: {escape(str(exc))}[/bold red]")
             status_label.update("[red]Failed to start — B to go back[/red]")
             return
 
         pid = self._process.pid
-        status_label.update(f"[cyan]Running PID {pid}… (B/Q to interrupt and go back)[/cyan]")
+        status_label.update(f"[cyan]Running PID {pid}… (B/Q to go back — process continues in background)[/cyan]")
 
-        # Stream output
+        # Stream output; catch CancelledError (screen popped) and drain pipe
+        # in background so the subprocess never blocks on a full pipe buffer.
         assert self._process.stdout is not None
-        async for raw in self._process.stdout:
-            line = raw.decode("utf-8", errors="replace").rstrip()
-            log.write(line)
+        try:
+            async for raw in self._process.stdout:
+                line = raw.decode("utf-8", errors="replace").rstrip()
+                log.write(line)
+        except asyncio.CancelledError:
+            asyncio.ensure_future(self._drain_stdout())
+            raise
 
         await self._process.wait()
         rc = self._process.returncode
@@ -129,14 +136,27 @@ class LogViewerScreen(Screen):
 
         self._done = True
 
+    async def _drain_stdout(self) -> None:
+        """Drain subprocess stdout after detaching so the process never blocks on a full pipe."""
+        try:
+            stdout = self._process.stdout if self._process else None
+            if stdout is None:
+                return
+            while not stdout.at_eof():
+                chunk = await stdout.read(8192)
+                if not chunk:
+                    break
+        except Exception:
+            pass
+
     def action_go_back(self) -> None:
         if self._process and self._process.returncode is None:
-            # Process still running — ask before leaving
-            self._process.terminate()
+            # Process is still running — leave it running, just detach.
+            # _drain_stdout is scheduled via CancelledError handler in _run_stage.
             self.app.notify(
-                "Process interrupted. It may still be running if it ignores SIGTERM. "
-                "Check pgrep before re-running.",
-                severity="warning",
+                "Stage is still running in the background. "
+                "Use T (Tail active log) from the checklist to re-attach.",
+                severity="information",
                 timeout=8,
             )
         self.app.pop_screen()
