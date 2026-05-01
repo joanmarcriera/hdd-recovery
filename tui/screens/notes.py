@@ -5,6 +5,8 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
+from rich.markup import escape
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.screen import Screen
@@ -37,13 +39,13 @@ class NotesScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
-        yield Label(f"[bold]Notes — {self.disk.job_name}[/bold]")
+        yield Label(f"[bold]Notes — {escape(self.disk.job_name)}[/bold]")
         yield ListView(id="notes-list")
         yield Label("New note (Enter to save, Escape to go back):", id="hint")
         yield Input(placeholder="Type a note and press Enter…", id="note-input")
         yield Footer()
 
-    def on_mount(self) -> None:
+    async def on_mount(self) -> None:
         self.sub_title = self.disk.job_name
         self._load_notes()
         self.query_one("#note-input", Input).focus()
@@ -59,7 +61,7 @@ class NotesScreen(Screen):
             lv.append(ListItem(Label("[dim]No notes yet.[/dim]")))
             return
         for ts, text in notes:
-            lv.append(ListItem(Label(f"[dim]{ts[:16]}[/dim]  {text}")))
+            lv.append(ListItem(Label(f"[dim]{ts[:16]}[/dim]  {escape(text)}")))
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()

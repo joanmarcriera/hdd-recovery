@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import subprocess
 
+from rich.markup import escape
+
 from textual import work
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -90,7 +92,7 @@ class BackupScreen(Screen):
         warn = self.query_one("#busy-warn", Static)
         if busy:
             warn.update(
-                f"⚠ [bold]{busy}[/bold] is currently running. "
+                f"⚠ [bold]{escape(busy)}[/bold] is currently running. "
                 "Real backup is blocked until it finishes. Dry run is always safe."
             )
         else:
@@ -130,7 +132,7 @@ class BackupScreen(Screen):
 
         self.app.call_from_thread(
             self.query_one("#out", Static).update,
-            f"[dim]$ {' '.join(cmd)}[/dim]\n\n[cyan]Running…[/cyan]",
+            f"[dim]$ {escape(' '.join(cmd))}[/dim]\n\n[cyan]Running…[/cyan]",
         )
         try:
             result = subprocess.run(

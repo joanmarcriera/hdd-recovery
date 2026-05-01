@@ -196,19 +196,23 @@ def page_db(db_path):
     except Exception as e:
         runs_html = f'<p class="err">{h(str(e))}</p>'
 
-    # counts
-    counts = {}
-    for tbl, label in [("files", "files"), ("recovered_artifacts", "artifacts"),
-                       ("wallet_candidates", "wallet_hits"), ("picture_candidates", "picture_hits"),
-                       ("bulk_extractor_hits", "bulk_hits")]:
-        counts[label] = query_scalar(db_path, f"SELECT COUNT(*) FROM {tbl}") or 0
-
+    # counts — map each to the correct existing route
+    COUNTS = [
+        ("files",               "SELECT COUNT(*) FROM files",               "/search",   "&#128196; Files"),
+        ("wallet candidates",   "SELECT COUNT(*) FROM wallet_candidates",    "/wallets",  "&#128179; Wallets"),
+        ("picture candidates",  "SELECT COUNT(*) FROM picture_candidates",   "/pictures", "&#128247; Pictures"),
+        ("artifacts",           "SELECT COUNT(*) FROM recovered_artifacts",  "/artifacts","&#128230; Artifacts"),
+        ("bulk hits",           "SELECT COUNT(*) FROM bulk_extractor_hits",  "/bulk_hits","&#128202; Bulk Hits"),
+        ("findings",            "SELECT COUNT(*) FROM findings",             "/findings", "&#128270; Findings"),
+    ]
     enc = urllib.parse.quote(db_path)
-    counts_html = "".join(
-        f'<a href="/{k}?db={enc}" style="margin-right:16px">'
-        f'<span class="badge ok">{v:,}</span> {k}</a>'
-        for k, v in counts.items()
-    )
+    counts_html = ""
+    for label, sql, route, icon in COUNTS:
+        n = query_scalar(db_path, sql) or 0
+        counts_html += (
+            f'<a href="{route}?db={enc}" style="margin-right:16px">'
+            f'<span class="badge ok">{n:,}</span> {icon}</a>'
+        )
 
     body = f"""
     <div class="panel"><h2>Image Info</h2>{info_html}</div>
@@ -217,8 +221,10 @@ def page_db(db_path):
         <a href="/timeline?db={enc}">&#128337; Timeline</a> &nbsp;
         <a href="/wallets?db={enc}">&#128179; Wallets</a> &nbsp;
         <a href="/pictures?db={enc}">&#128247; Pictures</a> &nbsp;
+        <a href="/findings?db={enc}">&#128270; Findings</a> &nbsp;
         <a href="/search?db={enc}">&#128269; File Search</a> &nbsp;
         <a href="/artifacts?db={enc}">&#128230; Artifacts</a> &nbsp;
+        <a href="/bulk_hits?db={enc}">&#128202; Bulk Hits</a> &nbsp;
         <a href="/sql?db={enc}">&#9998; SQL Query</a>
       </p>
     </div>
@@ -228,27 +234,34 @@ def page_db(db_path):
 
 
 def page_wallets(db_path, limit=200):
-    enc = urllib.parse.quote(db_path)
     try:
-        cols, rows = run_query(db_path,
-            f"SELECT score, name, path, size, reason FROM wallet_candidates ORDER BY score DESC LIMIT {limit}")
+        cols, rows = run_query(db_path, f"""
+            SELECT wc.score, wc.reason, wc.source_stage,
+                   f.name, f.path, f.size_bytes, wc.details, wc.created_at
+            FROM   wallet_candidates wc
+            LEFT JOIN files f ON f.id = wc.file_id
+            ORDER  BY wc.score DESC, f.path
+            LIMIT  {limit}""")
         body = f'<div class="panel">{table_html(cols, rows)}</div>'
     except Exception as e:
         body = f'<div class="panel err">{h(str(e))}</div>'
-    return page("Wallet Candidates", body, db_name=db_path,
-                nav_extra=f' &rsaquo; wallets')
+    return page("Wallet Candidates", body, db_name=db_path, nav_extra=' &rsaquo; wallets')
 
 
 def page_pictures(db_path, limit=500):
-    enc = urllib.parse.quote(db_path)
     try:
-        cols, rows = run_query(db_path,
-            f"SELECT score, name, path, size FROM picture_candidates ORDER BY score DESC LIMIT {limit}")
+        cols, rows = run_query(db_path, f"""
+            SELECT pc.score, pc.reason, pc.camera_model, pc.taken_at,
+                   pc.width, pc.height,
+                   f.name, f.path, f.size_bytes
+            FROM   picture_candidates pc
+            LEFT JOIN files f ON f.id = pc.file_id
+            ORDER  BY pc.score DESC, f.path
+            LIMIT  {limit}""")
         body = f'<div class="panel">{table_html(cols, rows)}</div>'
     except Exception as e:
         body = f'<div class="panel err">{h(str(e))}</div>'
-    return page("Picture Candidates", body, db_name=db_path,
-                nav_extra=' &rsaquo; pictures')
+    return page("Picture Candidates", body, db_name=db_path, nav_extra=' &rsaquo; pictures')
 
 
 def page_files(db_path, pattern="", limit=500):
@@ -283,7 +296,7 @@ def page_artifacts(db_path, method="", limit=1000):
     try:
         method_filter = f"WHERE method = '{method}'" if method else ""
         cols, rows = run_query(db_path,
-            f"""SELECT method, mime_type, size_bytes, original_path, sha256, created_at
+            f"""SELECT method, mime_type, size_bytes, relative_path, sha256, created_at
                 FROM recovered_artifacts {method_filter}
                 ORDER BY created_at DESC LIMIT {limit}""")
         # method selector
@@ -370,6 +383,111 @@ def page_sql(db_path, sql="", error="", cols=None, rows=None):
     return page("SQL Query", body, db_name=db_path, nav_extra=' &rsaquo; sql')
 
 
+def page_bulk_hits(db_path, scope="", feature="", limit=2000):
+    enc = urllib.parse.quote(db_path)
+    # scope selector
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        scopes = [r[0] for r in conn.execute(
+            "SELECT DISTINCT source_scope FROM bulk_extractor_hits ORDER BY source_scope").fetchall()]
+        features = [r[0] for r in conn.execute(
+            "SELECT DISTINCT feature_file FROM bulk_extractor_hits ORDER BY feature_file").fetchall()]
+        conn.close()
+    except Exception:
+        scopes, features = [], []
+
+    scope_opts = '<option value="">All scopes</option>' + "".join(
+        f'<option value="{h(s)}" {"selected" if s==scope else ""}>{h(s)}</option>' for s in scopes)
+    feat_opts = '<option value="">All features</option>' + "".join(
+        f'<option value="{h(f)}" {"selected" if f==feature else ""}>{h(f)}</option>' for f in features)
+
+    form = f"""<div class="panel">
+      <form method="get" action="/bulk_hits">
+        <input type="hidden" name="db" value="{h(db_path)}">
+        <select name="scope">{scope_opts}</select>
+        <select name="feature">{feat_opts}</select>
+        <button type="submit">Filter</button>
+      </form>
+    </div>"""
+
+    try:
+        where_parts = []
+        if scope:
+            where_parts.append(f"source_scope = '{scope.replace(chr(39), chr(39)*2)}'")
+        if feature:
+            where_parts.append(f"feature_file = '{feature.replace(chr(39), chr(39)*2)}'")
+        where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+        cols, rows = run_query(db_path,
+            f"SELECT source_scope, feature_file, value, context, offset_ref "
+            f"FROM bulk_extractor_hits {where} "
+            f"ORDER BY source_scope, feature_file LIMIT {limit}")
+        body = form + f'<div class="panel">{table_html(cols, rows)}</div>'
+    except Exception as e:
+        body = form + f'<div class="panel err">{h(str(e))}</div>'
+    return page("Bulk Extractor Hits", body, db_name=db_path, nav_extra=' &rsaquo; bulk_hits')
+
+
+def page_findings(db_path, tool="", category="", limit=2000):
+    enc = urllib.parse.quote(db_path)
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        tools = [r[0] for r in conn.execute(
+            "SELECT DISTINCT source_tool FROM findings ORDER BY source_tool").fetchall()]
+        cats  = [r[0] for r in conn.execute(
+            "SELECT DISTINCT category FROM findings ORDER BY category").fetchall()]
+        conn.close()
+    except Exception:
+        tools, cats = [], []
+
+    tool_opts = '<option value="">All tools</option>' + "".join(
+        f'<option value="{h(t)}" {"selected" if t==tool else ""}>{h(t)}</option>' for t in tools)
+    cat_opts = '<option value="">All categories</option>' + "".join(
+        f'<option value="{h(c)}" {"selected" if c==category else ""}>{h(c)}</option>' for c in cats)
+
+    form = f"""<div class="panel">
+      <p style="color:var(--sub);margin-bottom:8px">
+        Findings from: exiftool (GPS/EXIF), YARA (wallet patterns), regripper (Windows registry),
+        rifiuti2 (Recycle Bin), plaso (timeline), pdf-extract (seed phrases).
+      </p>
+      <form method="get" action="/findings">
+        <input type="hidden" name="db" value="{h(db_path)}">
+        <select name="tool">{tool_opts}</select>
+        <select name="category">{cat_opts}</select>
+        <button type="submit">Filter</button>
+      </form>
+    </div>"""
+
+    try:
+        where_parts = []
+        if tool:
+            where_parts.append(f"source_tool = '{tool.replace(chr(39), chr(39)*2)}'")
+        if category:
+            where_parts.append(f"category = '{category.replace(chr(39), chr(39)*2)}'")
+        where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
+        cols, rows = run_query(db_path,
+            f"SELECT source_tool, category, key, value, score, path, notes, created_at "
+            f"FROM findings {where} "
+            f"ORDER BY score DESC, source_tool, category LIMIT {limit}")
+        body = form + f'<div class="panel">{table_html(cols, rows)}</div>'
+    except Exception as e:
+        msg = str(e)
+        if "no such table" in msg:
+            body = form + (
+                '<div class="panel"><p>The <code>findings</code> table does not exist in this database yet. '
+                'It is created automatically when you run any of the following analysis stages:</p>'
+                '<ul style="margin:8px 0 0 20px;color:var(--sub)">'
+                '<li>EXIF Photo Enrichment (<code>image-enrich-photos.sh</code>)</li>'
+                '<li>YARA Wallet Scan (<code>image-yara-scan.sh</code>)</li>'
+                '<li>PDF Seed Extraction (<code>image-pdf-extract.sh</code>)</li>'
+                '<li>RegRipper (<code>image-regripper.sh</code>)</li>'
+                '<li>rifiuti2 (<code>image-rifiuti.sh</code>)</li>'
+                '</ul></div>'
+            )
+        else:
+            body = form + f'<div class="panel err">{h(msg)}</div>'
+    return page("Findings", body, db_name=db_path, nav_extra=' &rsaquo; findings')
+
+
 # ── request handler ───────────────────────────────────────────────────────────
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -430,6 +548,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self.wfile.write(data)
                 else:
                     self.send_html(page_timeline(db))
+            elif p == "/bulk_hits":
+                self.send_html(page_bulk_hits(db, self.qsval("scope"), self.qsval("feature")))
+            elif p == "/findings":
+                self.send_html(page_findings(db, self.qsval("tool"), self.qsval("category")))
+            elif p == "/files":
+                # /files was linked from old page_db counts; redirect to /search
+                import urllib.request
+                location = f"/search?db={urllib.parse.quote(db)}"
+                self.send_response(302)
+                self.send_header("Location", location)
+                self.end_headers()
             elif p == "/sql":
                 self.send_html(page_sql(db))
             else:

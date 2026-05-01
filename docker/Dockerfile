@@ -29,6 +29,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr tesseract-ocr-eng \
     # Full-text indexing (ENABLE_RECOLL=1 to activate)
     recoll \
+    # PDF text extraction (pdftotext)
+    poppler-utils \
+    # YARA pattern matching
+    yara \
+    # Windows Registry analysis
+    regripper \
+    # Windows Recycle Bin analysis
+    rifiuti2 \
+    # Super-timeline (log2timeline.py / psort.py)
+    python3-plaso \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # ── ttyd: download static binary (not in Kali apt) ───────────────────────────

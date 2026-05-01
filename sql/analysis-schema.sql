@@ -163,3 +163,28 @@ CREATE INDEX IF NOT EXISTS idx_picture_candidates_score ON picture_candidates(sc
 CREATE INDEX IF NOT EXISTS idx_artifacts_method ON recovered_artifacts(method);
 CREATE INDEX IF NOT EXISTS idx_bulk_value ON bulk_extractor_hits(value);
 CREATE INDEX IF NOT EXISTS idx_bulk_scope_file ON bulk_extractor_hits(source_scope, feature_file);
+
+-- Unified findings table: output from exiftool, YARA, regripper, rifiuti2, plaso, pdf-extract.
+-- source_tool: 'exiftool' | 'yara' | 'regripper' | 'rifiuti2' | 'plaso' | 'pdf-extract'
+-- category:    'gps' | 'metadata' | 'wallet' | 'registry' | 'recycle_bin' | 'timeline' | 'seed_phrase'
+-- key/value:   tool-specific attribute name and its value
+-- score:       relevance 0-100 (0 = informational, ≥70 = high interest)
+CREATE TABLE IF NOT EXISTS findings (
+  id          INTEGER PRIMARY KEY,
+  source_tool TEXT    NOT NULL,
+  category    TEXT    NOT NULL,
+  file_id     INTEGER,
+  artifact_id INTEGER,
+  path        TEXT,
+  key         TEXT,
+  value       TEXT,
+  score       INTEGER DEFAULT 0,
+  notes       TEXT,
+  created_at  TEXT    NOT NULL,
+  FOREIGN KEY (file_id)     REFERENCES files(id)               ON DELETE SET NULL,
+  FOREIGN KEY (artifact_id) REFERENCES recovered_artifacts(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_findings_tool     ON findings(source_tool);
+CREATE INDEX IF NOT EXISTS idx_findings_category ON findings(category);
+CREATE INDEX IF NOT EXISTS idx_findings_score    ON findings(score DESC);
+CREATE INDEX IF NOT EXISTS idx_findings_key      ON findings(key);

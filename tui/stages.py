@@ -1,6 +1,16 @@
 """Stage definitions — one entry per workflow step."""
+import re
 from dataclasses import dataclass, field
 from typing import Optional
+
+# Textual 8.x markup parser rejects [link=https://...] because :// confuses it.
+# Replace with "display_text [dim]url[/dim]" at render time.
+_LINK_RE = re.compile(r'\[link=([^\]]+)\]([^\[]*)\[/link\]')
+
+
+def clean_markup(text: str) -> str:
+    """Strip [link=URL]text[/link] → 'text [dim]URL[/dim]' for Textual 8.x."""
+    return _LINK_RE.sub(r'\2 [dim]\1[/dim]', text)
 
 
 @dataclass
@@ -79,7 +89,8 @@ STAGES: list[StageDef] = [
         description=(
             "Run ddrescue-run.sh in plan mode to confirm source device, "
             "image path, and map path before any real imaging starts. "
-            "Nothing is written to disk."
+            "Nothing is written to disk.\n\n"
+            "[link=https://www.gnu.org/software/ddrescue/]GNU ddrescue homepage[/link]"
         ),
         script="ddrescue-run.sh",
         args_template=["{conf}", "plan"],
@@ -100,7 +111,8 @@ STAGES: list[StageDef] = [
             "Reads all easily accessible sectors without retry work. "
             "This is the primary imaging step — can take 2–24 hours "
             "depending on disk size and health.\n\n"
-            "The TUI will automatically confirm the ddrescue --ask prompt."
+            "The TUI will automatically confirm the ddrescue --ask prompt.\n\n"
+            "[link=https://www.gnu.org/software/ddrescue/]GNU ddrescue homepage[/link]"
         ),
         script="ddrescue-run.sh",
         args_template=["{conf}", "first", "--run"],
@@ -119,7 +131,8 @@ STAGES: list[StageDef] = [
         name="Check Map / Coverage",
         description=(
             "Display the current ddrescue map: total rescued, what remains unread. "
-            "Use this to decide whether retry passes are needed."
+            "Use this to decide whether retry passes are needed.\n\n"
+            "[link=https://www.gnu.org/software/ddrescue/]GNU ddrescue homepage[/link]"
         ),
         script="ddrescue-status.sh",
         args_template=["{mapfile}"],
@@ -139,7 +152,8 @@ STAGES: list[StageDef] = [
             "Detailed text breakdown of the ddrescue map: block regions, "
             "rescued vs unrescued sectors, error clusters.\n\n"
             "For a graphical view, run in a separate terminal:\n"
-            "  ddrescueview <mapfile>"
+            "  ddrescueview <mapfile>\n\n"
+            "[link=https://www.gnu.org/software/ddrescue/]GNU ddrescue homepage[/link]"
         ),
         script="image-mapview.sh",
         args_template=["{mapfile}"],
@@ -158,7 +172,8 @@ STAGES: list[StageDef] = [
         name="ddrescue Retry Pass (optional)",
         description=(
             "Retry unread sectors using direct I/O and up to 3 attempts per block. "
-            "Only useful if the first pass left unread areas (map coverage < 100%)."
+            "Only useful if the first pass left unread areas (map coverage < 100%).\n\n"
+            "[link=https://www.gnu.org/software/ddrescue/]GNU ddrescue homepage[/link]"
         ),
         script="ddrescue-run.sh",
         args_template=["{conf}", "retry", "--run"],
@@ -176,7 +191,10 @@ STAGES: list[StageDef] = [
         key="ddrescue-reverse",
         number=8,
         name="ddrescue Reverse Pass (optional)",
-        description="Approach remaining bad sectors from the opposite direction.",
+        description=(
+            "Approach remaining bad sectors from the opposite direction.\n\n"
+            "[link=https://www.gnu.org/software/ddrescue/]GNU ddrescue homepage[/link]"
+        ),
         script="ddrescue-run.sh",
         args_template=["{conf}", "reverse", "--run"],
         scan_run_key=None,
@@ -192,7 +210,10 @@ STAGES: list[StageDef] = [
         key="ddrescue-retrim",
         number=9,
         name="ddrescue Retrim Pass (optional)",
-        description="Mark failed blocks for retrim and make one final conservative attempt.",
+        description=(
+            "Mark failed blocks for retrim and make one final conservative attempt.\n\n"
+            "[link=https://www.gnu.org/software/ddrescue/]GNU ddrescue homepage[/link]"
+        ),
         script="ddrescue-run.sh",
         args_template=["{conf}", "retrim", "--run"],
         scan_run_key=None,
@@ -214,7 +235,8 @@ STAGES: list[StageDef] = [
             "Stage 1: fast pass — rescue most data, no retries, skip bad areas. "
             "Writes a badblocks file for stage 2.\n\n"
             "Use safecopy INSTEAD OF ddrescue when ddrescue exits immediately or "
-            "makes no forward progress. Do not mix both on the same image."
+            "makes no forward progress. Do not mix both on the same image.\n\n"
+            "[link=http://safecopy.sourceforge.net/]safecopy homepage[/link]"
         ),
         script="image-safecopy-run.sh",
         args_template=["{conf}", "stage1", "--run"],
@@ -233,7 +255,8 @@ STAGES: list[StageDef] = [
         name="Safecopy Stage 2 (optional)",
         description=(
             "Stage 2: search for exact boundaries of bad areas identified in stage 1. "
-            "Slower but recovers data around bad regions."
+            "Slower but recovers data around bad regions.\n\n"
+            "[link=http://safecopy.sourceforge.net/]safecopy homepage[/link]"
         ),
         script="image-safecopy-run.sh",
         args_template=["{conf}", "stage2", "--run"],
@@ -251,7 +274,8 @@ STAGES: list[StageDef] = [
         name="Safecopy Stage 3 (optional)",
         description=(
             "Stage 3: maximum retries with head realignment tricks. "
-            "Highest stress on the hardware — last resort."
+            "Highest stress on the hardware — last resort.\n\n"
+            "[link=http://safecopy.sourceforge.net/]safecopy homepage[/link]"
         ),
         script="image-safecopy-run.sh",
         args_template=["{conf}", "stage3", "--run"],
@@ -271,7 +295,8 @@ STAGES: list[StageDef] = [
         name="Initialize Image DB",
         description=(
             "Create or refresh the per-image SQLite catalog and export directory tree. "
-            "Must be run before every other analysis step. Safe to re-run at any time."
+            "Must be run before every other analysis step. Safe to re-run at any time.\n\n"
+            "[link=https://www.sleuthkit.org/]The Sleuth Kit homepage[/link]"
         ),
         script="image-analysis-init.sh",
         args_template=["{image}", "--map", "{mapfile}"],
@@ -289,7 +314,8 @@ STAGES: list[StageDef] = [
         description=(
             "Run fdisk, parted, mmls, img_stat, and blkid on the image. "
             "Collects partition layout, filesystem type hints, and sector geometry. "
-            "Use --force to re-run after indexing has already populated the DB."
+            "Use --force to re-run after indexing has already populated the DB.\n\n"
+            "[link=https://www.sleuthkit.org/]The Sleuth Kit homepage[/link]"
         ),
         script="image-structure-scan.sh",
         args_template=["{db}"],
@@ -308,7 +334,8 @@ STAGES: list[StageDef] = [
             "Build a filesystem-aware file inventory using fiwalk. "
             "Preserves original paths, inodes, timestamps, and partition context. "
             "Wallet and picture detection depend on this step. "
-            "This is the most valuable early analysis step."
+            "This is the most valuable early analysis step.\n\n"
+            "[link=https://www.sleuthkit.org/sleuthkit/]The Sleuth Kit / fiwalk[/link]"
         ),
         script="image-index-tsk.sh",
         args_template=["{db}"],
@@ -327,7 +354,9 @@ STAGES: list[StageDef] = [
             "Score files from the filesystem inventory against wallet keywords and extensions. "
             "Results go into the wallet_candidates table.\n\n"
             "CAVEAT: hits are candidates only. Terms like 'seeds' or 'wallet' appear "
-            "in eMule/aMule temp dirs and many unrelated contexts. Always verify by content."
+            "in eMule/aMule temp dirs and many unrelated contexts. Always verify by content.\n\n"
+            "Query results:\n"
+            "  image-query.sh <db> wallets"
         ),
         script="image-detect-wallets.sh",
         args_template=["{db}"],
@@ -345,7 +374,9 @@ STAGES: list[StageDef] = [
         description=(
             "Score files from the filesystem inventory against picture extensions "
             "and path patterns (DCIM, Pictures, Photos). "
-            "Results go into the picture_candidates table."
+            "Results go into the picture_candidates table.\n\n"
+            "Query results:\n"
+            "  image-query.sh <db> pictures"
         ),
         script="image-detect-pictures.sh",
         args_template=["{db}"],
@@ -356,14 +387,44 @@ STAGES: list[StageDef] = [
         requires_db_write=True,
         requires_prior=["index-tsk"],
     ),
+    # ── NEW: EXIF enrichment ──────────────────────────────────────────────
+    StageDef(
+        key="enrich-photos",
+        number=18,
+        name="EXIF Photo Enrichment",
+        description=(
+            "Run exiftool on recovered image artifacts to extract EXIF metadata.\n\n"
+            "Populates in the database:\n"
+            "  • picture_candidates.camera_model / taken_at / width / height\n"
+            "  • findings table (source_tool=exiftool): GPS coordinates, camera make/model\n\n"
+            "GPS coordinates are especially valuable — they can confirm a seed phrase backup "
+            "photo was taken at a specific location or on a specific device.\n\n"
+            "Requires: at least one carving or recovery stage to have produced image artifacts.\n\n"
+            "Query GPS hits afterwards:\n"
+            "  image-query.sh <db> findings exiftool\n\n"
+            "[link=https://exiftool.org]exiftool by Phil Harvey[/link]"
+        ),
+        script="image-enrich-photos.sh",
+        args_template=["{db}"],
+        scan_run_key="enrich-photos",
+        pgrep_pattern="exiftool",
+        runtime_hint="1 – 20 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["detect-pictures"],
+    ),
+    # ── Filesystem-specific recovery ──────────────────────────────────────
     StageDef(
         key="ext-recover",
-        number=18,
+        number=19,
         name="Ext Deleted-File Recovery (optional)",
         description=(
             "Run ext3/ext4 journal-aware deleted file recovery using extundelete and/or ext4magic. "
             "Only useful if the image contains ext3/ext4 partitions. "
-            "Recovers files deleted before imaging."
+            "Recovers files deleted before imaging.\n\n"
+            "[link=http://extundelete.sourceforge.net/]extundelete[/link]  "
+            "[link=https://sourceforge.net/projects/ext4magic/]ext4magic[/link]"
         ),
         script="image-ext-recover.sh",
         args_template=["{db}"],
@@ -377,12 +438,13 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="ntfs-recover",
-        number=19,
+        number=20,
         name="NTFS Deleted-File Recovery (optional)",
         description=(
             "Recover deleted files from NTFS partitions using ntfsundelete. "
             "Only useful if the image contains NTFS partitions (Windows disks). "
-            "Runs a scan pass to identify recoverable files, then extracts them."
+            "Runs a scan pass to identify recoverable files, then extracts them.\n\n"
+            "[link=https://www.tuxera.com/community/open-source-ntfs-3g/]ntfs-3g / ntfsundelete[/link]"
         ),
         script="image-ntfs-recover.sh",
         args_template=["{db}"],
@@ -396,12 +458,13 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="fat-recover",
-        number=20,
+        number=21,
         name="FAT/exFAT Recovery (optional)",
         description=(
             "Recover all files including deleted ones from FAT12/FAT16/FAT32/exFAT "
             "partitions using fatcat. Covers old digital camera cards, USB sticks, "
-            "and legacy Windows partitions."
+            "and legacy Windows partitions.\n\n"
+            "[link=https://github.com/Gregwar/fatcat]fatcat homepage[/link]"
         ),
         script="image-fat-recover.sh",
         args_template=["{db}"],
@@ -415,14 +478,15 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="xfs-recover",
-        number=21,
+        number=22,
         name="XFS Deleted-File Recovery (optional)",
         description=(
             "Recover deleted files from XFS partitions using xfs_undelete.\n\n"
             "Requires installation:\n"
             "  apt install xfsprogs tcllib\n"
             "  git clone https://github.com/ianka/xfs_undelete /opt/xfs_undelete\n"
-            "  ln -s /opt/xfs_undelete/xfs_undelete /usr/local/bin/xfs_undelete"
+            "  ln -s /opt/xfs_undelete/xfs_undelete /usr/local/bin/xfs_undelete\n\n"
+            "[link=https://github.com/ianka/xfs_undelete]xfs_undelete homepage[/link]"
         ),
         script="image-xfs-recover.sh",
         args_template=["{db}"],
@@ -436,14 +500,15 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="btrfs-recover",
-        number=22,
+        number=23,
         name="Btrfs Recovery (optional)",
         description=(
             "Recover files from Btrfs partitions using btrfs restore. "
             "btrfs restore is read-only against the source — safe on images. "
             "Continues past errors with -i flag, so partial output is common "
             "on damaged filesystems.\n\n"
-            "Requires: apt install btrfs-progs"
+            "Requires: apt install btrfs-progs\n\n"
+            "[link=https://btrfs.readthedocs.io]Btrfs documentation[/link]"
         ),
         script="image-btrfs-recover.sh",
         args_template=["{db}"],
@@ -457,14 +522,19 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="bulk-extractor-raw",
-        number=23,
+        number=24,
         name="Bulk Extractor (raw image)",
         description=(
-            "Run bulk_extractor across the entire raw image to extract text artifacts: "
-            "email addresses, URLs, Bitcoin/crypto addresses, JSON fragments, "
-            "NTFS traces, and other patterns.\n\n"
+            "Run bulk_extractor across the entire raw image to extract text artifacts:\n"
+            "  • Email addresses, URLs, JSON fragments\n"
+            "  • Bitcoin/crypto addresses (accts scanner)\n"
+            "  • NTFS traces, Windows paths\n"
+            "  • Hex-encoded strings ≥8 bytes [base16 scanner — catches hex private keys]\n"
+            "  • Wordlist of all tokens [wordlist scanner — use with john/hashcat]\n"
+            "  • Outlook PST/OST fragments [outlook scanner]\n\n"
             "Results stored in indexes/bulk_extractor_raw/ and imported into SQLite "
-            "(capped at BULK_HIT_LIMIT rows per feature file)."
+            "(capped at BULK_HIT_LIMIT rows per feature file).\n\n"
+            "[link=https://github.com/simsong/bulk_extractor]bulk_extractor homepage[/link]"
         ),
         script="image-bulk-extractor.sh",
         args_template=["{db}", "--scope", "raw"],
@@ -476,16 +546,76 @@ STAGES: list[StageDef] = [
         warning="Very long-running. Monitor output growth: du -sh on indexes/bulk_extractor_raw/",
         requires_prior=["init-db"],
     ),
+    # ── NEW: PDF seed extraction ──────────────────────────────────────────
+    StageDef(
+        key="pdf-extract",
+        number=25,
+        name="PDF Seed Phrase Extraction",
+        description=(
+            "Extract text from recovered PDF files and scan for BIP39 seed phrases.\n\n"
+            "Wallet software commonly exports recovery instructions as PDFs:\n"
+            "  • Electrum paper wallet exports\n"
+            "  • Hardware wallet setup guides (Ledger, Trezor)\n"
+            "  • MetaMask Secret Recovery Phrase backups\n\n"
+            "Hits written to:\n"
+            "  findings table (source_tool=pdf-extract, category=seed_phrase)\n"
+            "  wallet_candidates (for runs ≥ 12 consecutive BIP39 words)\n"
+            "  notes table (high-confidence hits only)\n\n"
+            "Query results:\n"
+            "  image-query.sh <db> findings pdf-extract\n\n"
+            "[link=https://poppler.freedesktop.org]poppler-utils (pdftotext)[/link]"
+        ),
+        script="image-pdf-extract.sh",
+        args_template=["{db}"],
+        scan_run_key="pdf-extract",
+        pgrep_pattern="pdftotext",
+        runtime_hint="5 – 30 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["init-db"],
+    ),
+    # ── NEW: YARA scanning ────────────────────────────────────────────────
+    StageDef(
+        key="yara-scan",
+        number=26,
+        name="YARA Wallet & Key Pattern Scan",
+        description=(
+            "Run YARA pattern-matching rules against the recovered corpus.\n\n"
+            "Rules in /root/hdd-recovery/config/yara/:\n"
+            "  wallets.yar    — Ethereum keystore, Electrum JSON, MetaMask vault,\n"
+            "                   Bitcoin Core wallet.dat markers, Exodus, Trust Wallet\n"
+            "  crypto_keys.yar — xpub/xprv BIP32 keys, WIF private keys,\n"
+            "                   PEM-armored EC/RSA keys, BIP39 seed word clusters\n\n"
+            "Results written to:\n"
+            "  findings table (source_tool=yara, category=wallet)\n"
+            "  wallet_candidates (for score ≥ 65)\n"
+            "  hits/yara/<timestamp>/hits.tsv\n\n"
+            "Query results:\n"
+            "  image-query.sh <db> findings yara\n\n"
+            "[link=https://virustotal.github.io/yara/]YARA homepage[/link]"
+        ),
+        script="image-yara-scan.sh",
+        args_template=["{db}"],
+        scan_run_key="yara-scan",
+        pgrep_pattern="yara",
+        runtime_hint="5 – 30 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["init-db"],
+    ),
     # ── Carving ───────────────────────────────────────────────────────────
     StageDef(
         key="carve-foremost",
-        number=24,
+        number=27,
         name="Carve with Foremost",
         description=(
             "Broad signature-based file carving using foremost. "
             "Recovers deleted and free-space files regardless of filesystem state. "
             "Expect heavy noise: web cache files, thumbnails, and application assets "
-            "alongside useful files."
+            "alongside useful files.\n\n"
+            "[link=http://foremost.sourceforge.net/]Foremost homepage[/link]"
         ),
         script="image-carve.sh",
         args_template=["{db}", "--method", "foremost"],
@@ -498,12 +628,13 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="carve-scalpel",
-        number=25,
+        number=28,
         name="Carve with Scalpel",
         description=(
             "Controlled carving using a tuned scalpel config targeting wallet files, "
             "documents, and common archive formats. Less noisy than foremost "
-            "but may miss some file types."
+            "but may miss some file types.\n\n"
+            "[link=https://github.com/sleuthkit/scalpel]Scalpel homepage[/link]"
         ),
         script="image-carve.sh",
         args_template=["{db}", "--method", "scalpel"],
@@ -516,13 +647,14 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="carve-recoverjpeg",
-        number=26,
+        number=29,
         name="Carve JPEGs with recoverjpeg (optional)",
         description=(
             "Fast JPEG-only carver — lighter and faster than foremost/scalpel "
             "when the primary goal is recovering photos.\n\n"
             "Scans for JPEG markers (SOI/EOI), extracts every recoverable image. "
-            "Outputs named image000000.jpg, image000001.jpg, etc."
+            "Outputs named image000000.jpg, image000001.jpg, etc.\n\n"
+            "[link=https://rfc1149.net/devel/recoverjpeg.html]recoverjpeg homepage[/link]"
         ),
         script="image-carve.sh",
         args_template=["{db}", "--method", "recoverjpeg"],
@@ -536,13 +668,14 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="carve-magicrescue",
-        number=27,
+        number=30,
         name="Carve with Magicrescue (optional)",
         description=(
             "Recipe-based carver with good coverage for office docs, images, audio, "
             "archives, and SQLite databases (useful for wallet.dat).\n\n"
             "Uses recipes: jpeg-jfif, jpeg-exif, png, sqlite, zip, rar, gzip, msoffice, "
-            "mp3-id3v1, mp3-id3v2, avi."
+            "mp3-id3v1, mp3-id3v2, avi.\n\n"
+            "[link=https://github.com/jbj/magicrescue]magicrescue homepage[/link]"
         ),
         script="image-carve.sh",
         args_template=["{db}", "--method", "magicrescue"],
@@ -557,14 +690,15 @@ STAGES: list[StageDef] = [
     # ── Post-carve analysis ───────────────────────────────────────────────
     StageDef(
         key="bulk-extractor-recovered",
-        number=28,
+        number=31,
         name="Bulk Extractor (recovered corpus)",
         description=(
             "Run bulk_extractor over the recovered/carved corpus directory. "
             "Extracts text artifacts from already-carved files — useful when "
             "the raw-image pass missed content inside carved containers.\n\n"
             "WARNING: can spin at 100% CPU during finalization with no visible output. "
-            "Monitor with: du -sh on indexes/bulk_extractor_recovered/"
+            "Monitor with: du -sh on indexes/bulk_extractor_recovered/\n\n"
+            "[link=https://github.com/simsong/bulk_extractor]bulk_extractor homepage[/link]"
         ),
         script="image-bulk-extractor.sh",
         args_template=["{db}", "--scope", "recovered"],
@@ -578,13 +712,14 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="recoll-index",
-        number=29,
+        number=32,
         name="Recoll Full-Text Index (optional)",
         description=(
             "Build a Recoll full-text search index over the recovered corpus. "
             "Useful for searching specific terms inside recovered documents, PDFs, etc. "
             "Disabled by default (ENABLE_RECOLL=0 in config). "
-            "Set ENABLE_RECOLL=1 to activate."
+            "Set ENABLE_RECOLL=1 to activate.\n\n"
+            "[link=https://www.lesbonscomptes.com/recoll/]Recoll homepage[/link]"
         ),
         script="image-index-recoll.sh",
         args_template=["{db}", "--path", "{export_root}/recovered"],
@@ -598,14 +733,18 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="ntfs-artifact-summary",
-        number=30,
+        number=33,
         name="NTFS Artifact Summary",
         description=(
             "Extract Windows-specific traces from raw bulk_extractor output: "
             "MFT carved entries, USN journal, prefetch records, LNK files, "
             "Windows directory paths.\n\n"
             "Useful even when the current filesystem is ext4 — "
-            "NTFS traces reveal prior Windows use of the same disk."
+            "NTFS traces reveal prior Windows use of the same disk.\n\n"
+            "Outputs to: exports/recovered/ntfs-artifacts/\n"
+            "  interesting-lines.tsv — keyword-matched lines\n"
+            "  possible-windows-paths.tsv — reconstructed Windows paths\n\n"
+            "[link=https://www.sleuthkit.org/]The Sleuth Kit homepage[/link]"
         ),
         script="image-ntfs-artifact-summary.sh",
         args_template=["{db}"],
@@ -616,15 +755,118 @@ STAGES: list[StageDef] = [
         requires_db_write=True,
         requires_prior=["bulk-extractor-raw"],
     ),
+    # ── NEW: Windows Registry analysis ────────────────────────────────────
+    StageDef(
+        key="regripper",
+        number=34,
+        name="RegRipper — Windows Registry Analysis",
+        description=(
+            "Run RegRipper on Windows registry hive files found in the recovered corpus.\n\n"
+            "Extracts from NTUSER.DAT / SOFTWARE / SYSTEM / SAM hives:\n"
+            "  • MRU file lists — recently opened files (may include wallet software)\n"
+            "  • Installed software — Bitcoin Core, Electrum, exchange apps\n"
+            "  • USB device history — Ledger/Trezor hardware wallets are USB devices\n"
+            "  • UserAssist — program execution history with timestamps\n"
+            "  • Run/RunOnce keys — startup entries\n\n"
+            "Outputs to: exports/structure/registry/\n"
+            "  *.rip.txt          — full RegRipper output per hive\n"
+            "  *.interesting.txt  — lines matching crypto/wallet keywords\n"
+            "  summary.tsv        — hive processing summary\n\n"
+            "Requires: at least one carving stage to have extracted registry hives.\n"
+            "Only relevant for Windows disk images.\n\n"
+            "Query results:\n"
+            "  image-query.sh <db> findings regripper\n\n"
+            "[link=https://github.com/keydet89/RegRipper3.0]RegRipper by Harlan Carvey[/link]"
+        ),
+        script="image-regripper.sh",
+        args_template=["{db}"],
+        scan_run_key="regripper",
+        pgrep_pattern="regripper",
+        runtime_hint="2 – 10 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["ntfs-artifact-summary"],
+    ),
+    # ── NEW: Windows Recycle Bin ──────────────────────────────────────────
+    StageDef(
+        key="rifiuti2",
+        number=35,
+        name="rifiuti2 — Windows Recycle Bin Analysis",
+        description=(
+            "Parse Windows Recycle Bin metadata to recover original file paths\n"
+            "and deletion timestamps.\n\n"
+            "Covers two formats:\n"
+            "  INFO2 — Windows 98/Me/2000/XP ($Recycle.Bin/INFO2)\n"
+            "  $I files — Windows Vista/7/8/10/11 (per-deleted-file metadata)\n\n"
+            "Useful for:\n"
+            "  • Wallet files the user deleted before reformatting\n"
+            "  • Exchange app data or browser download history\n"
+            "  • Documents or seed phrase backups\n\n"
+            "Outputs to: exports/structure/recycle-bin/\n"
+            "  all_deleted_files.tsv — original path + deletion time for every entry\n\n"
+            "Only relevant for Windows disk images.\n\n"
+            "Query results:\n"
+            "  image-query.sh <db> findings rifiuti2\n\n"
+            "[link=https://abelcheung.github.io/rifiuti2/]rifiuti2 homepage[/link]"
+        ),
+        script="image-rifiuti.sh",
+        args_template=["{db}"],
+        scan_run_key="rifiuti2",
+        pgrep_pattern="rifiuti2",
+        runtime_hint="< 5 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["ntfs-artifact-summary"],
+    ),
+    # ── NEW: Super-timeline ───────────────────────────────────────────────
+    StageDef(
+        key="plaso-timeline",
+        number=36,
+        name="plaso Super-Timeline",
+        description=(
+            "Generate a comprehensive super-timeline from the recovered corpus\n"
+            "using log2timeline (plaso).\n\n"
+            "Parses 50+ artifact types from the recovered/ directory:\n"
+            "  • File system timestamps (atime, mtime, ctime)\n"
+            "  • EXIF metadata from images\n"
+            "  • Windows LNK shortcut files\n"
+            "  • Windows prefetch records\n"
+            "  • Browser history (Chrome, Firefox)\n"
+            "  • Recycle Bin entries\n"
+            "  • Shellbags, recently accessed folders\n\n"
+            "Outputs to: exports/timeline/\n"
+            "  <basename>.plaso          — plaso storage file (SQLite internally)\n"
+            "  <basename>.timeline.csv   — sortable l2tcsv timeline\n\n"
+            "Query the CSV timeline:\n"
+            "  grep -i wallet <basename>.timeline.csv | sort\n\n"
+            "NOTE: runs against recovered corpus only. Use --full for raw image (hours).\n\n"
+            "Binaries: plaso-log2timeline, plaso-psort  (package: python3-plaso)\n\n"
+            "[link=https://plaso.readthedocs.io]plaso / log2timeline documentation[/link]"
+        ),
+        script="image-plaso.sh",
+        args_template=["{db}"],
+        scan_run_key="plaso-timeline",
+        pgrep_pattern="plaso-log2timeline",
+        runtime_hint="30 min – 4 h",
+        rerunnable=True,
+        requires_db_write=True,
+        warning="Long-running. Monitor progress in the log. Use --full to include raw image (much slower).",
+        is_optional=True,
+        requires_prior=["init-db"],
+    ),
+    # ── Broad recovery & report ───────────────────────────────────────────
     StageDef(
         key="photorec-broad",
-        number=31,
+        number=37,
         name="PhotoRec Broad Recovery",
         description=(
             "Broadest carver — recovers the most file types from unallocated space. "
             "Usually the highest-value broad carver for pictures and documents, "
             "but also the noisiest. Output under recovered/photorec/<profile>-<timestamp>/.\n\n"
-            "Uses /cmd for unattended operation on this installed build."
+            "Uses /cmd for unattended operation on this installed build.\n\n"
+            "[link=https://www.cgsecurity.org/wiki/PhotoRec]PhotoRec homepage[/link]"
         ),
         script="image-photorec-run.sh",
         args_template=["{db}", "--profile", "broad"],
@@ -638,13 +880,14 @@ STAGES: list[StageDef] = [
     ),
     StageDef(
         key="generate-report",
-        number=32,
+        number=38,
         name="Generate Report",
         description=(
             "Generate a summary report for this image covering all stages, "
             "file counts, wallet candidates, picture candidates, recovered artifact "
             "locations with disk usage, and bulk extractor hits. "
-            "Re-run after any heavy stage to refresh the summary."
+            "Re-run after any heavy stage to refresh the summary.\n\n"
+            "Also useful after YARA, regripper, or rifiuti2 to capture their findings."
         ),
         script="image-report.sh",
         args_template=["{db}"],

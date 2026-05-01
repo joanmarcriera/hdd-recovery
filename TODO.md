@@ -19,6 +19,71 @@ Future improvements roughly ordered by impact.
 
 ---
 
+## Toolchain — Implemented in this session (2026-04-30)
+
+The following were added as part of the deeper analysis toolchain expansion:
+
+| Tool | Script | Status |
+|------|--------|--------|
+| bulk_extractor extra scanners (wordlist, base16, outlook) | `image-bulk-extractor.sh` | **done** |
+| exiftool EXIF enrichment + GPS | `image-enrich-photos.sh` | **done** |
+| YARA wallet/key pattern matching | `image-yara-scan.sh` + `config/yara/*.yar` | **done** |
+| pdftotext BIP39 seed extraction | `image-pdf-extract.sh` | **done** |
+| RegRipper Windows registry analysis | `image-regripper.sh` | **done** |
+| rifiuti2 Windows Recycle Bin | `image-rifiuti.sh` | **done** |
+| plaso super-timeline | `image-plaso.sh` | **done** |
+| `findings` table in SQLite schema | `sql/analysis-schema.sql` | **done** |
+| TUI stages for all above | `tui/stages.py` (38 stages total) | **done** |
+
+All above are in the TUI under the appropriate stage numbers. All require `docker compose up -d --build` to take effect in the container.
+
+---
+
+## Toolchain — Remaining (not yet implemented)
+
+### john + hashcat + bitcoin2john — wallet cracking
+Closes the gap between *finding* wallet.dat and *recovering* from it. `bitcoin2john.py` is already on the host at `/usr/share/john/bitcoin2john.py`.
+
+**Dockerfile:** add `john john-data hashcat hashcat-data`  
+**Script needed:** `bin/image-crack-wallet.sh`  
+  1. Run `bitcoin2john.py` on each wallet.dat in `wallet_candidates`  
+  2. Pass hash to john with rockyou wordlist, then with the bulk_extractor wordlist output  
+  3. Write cracked passwords to `scan_runs` notes and `notes` table  
+**TUI stage:** key `crack-wallets`, optional, after `yara-scan`
+
+### btcrecover — partial BIP39 seed recovery
+For when OCR finds 10 of 12 words, or words are scrambled/misread.
+
+**Install:** `pip install btcrecover`  
+**TUI stage:** key `btcrecover`, is_manual=True with usage instructions, after `crack-wallets`  
+Homepage: https://github.com/3rdIteration/btcrecover
+
+### Plain-text BIP39 scanner
+Scan recovered `.txt`, `.html`, `.md`, `.rtf`, `.csv` files for BIP39 word runs. Same
+algorithm as `image-ocr-seed-scan.py` and `image-pdf-extract.sh`.
+
+**Script needed:** `bin/image-text-seed-scan.sh`  
+**TUI stage:** key `text-seed-scan`, optional, after `pdf-extract` (stage 25)
+
+### Photo deduplication (perceptual hash)
+PhotoRec + foremost + recoverjpeg produce thousands of near-duplicate images.
+`pip install imagehash` (Pillow already present). Group by pHash distance < 10.
+
+**Script needed:** `bin/image-dedup-photos.sh`  
+**Schema addition:** `ALTER TABLE recovered_artifacts ADD COLUMN dedup_cluster_id INTEGER`  
+**TUI stage:** key `dedup-photos`, optional, after `enrich-photos` (stage 18)
+
+### Import plaso events into `findings` table
+After `image-plaso.sh` produces its SQLite, import wallet-keyword matching events
+into the main `findings` table for unified querying.  
+Implement as a post-processing step inside `image-plaso.sh`.
+
+### psort filter preset for crypto keywords
+After `log2timeline`, run `psort.py` with a message filter for bitcoin/wallet/seed/ledger to
+produce a focused sub-timeline alongside the full one.
+
+---
+
 ## Recovery toolchain
 
 ### Additional carving / recovery tools

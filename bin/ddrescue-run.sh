@@ -137,8 +137,11 @@ fi
 _smart_snap="/root/recovery-monitor/smart-snapshot.sh"
 if [[ -x "$_smart_snap" ]]; then
   printf 'Capturing pre-run SMART snapshot...\n'
-  ONCE=1 SNAP_DIR="${LOGS_DIR}/smart" "$_smart_snap" "$SOURCE_DEV" "$DEST_DEV" 2>/dev/null || true
+  _smart_args=("$SOURCE_DEV")
+  if [[ -n "${DEST_DEV:-}" ]]; then
+    _smart_args+=("$DEST_DEV")
+  fi
+  ONCE=1 SNAP_DIR="${LOGS_DIR}/smart" "$_smart_snap" "${_smart_args[@]}" 2>/dev/null || true
 fi
 
 exec "${cmd[@]}"
-

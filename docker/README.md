@@ -2,7 +2,252 @@
 
 ## Overview
 
-`joanmarcriera/hdd-forensics` is the analysis half of a two-machine recovery workflow. The acquisition machine (Optiplex/Kali) images source HDDs with ddrescue and transfers the raw `.img` files to a TrueNAS SCALE NAS over SSH. This container runs on TrueNAS and provides the full forensics toolchain — sleuthkit, bulk_extractor, foremost, scalpel, PhotoRec, ext4magic, extundelete, tesseract-ocr, recoll, and the project's analysis scripts — accessible through a browser-based terminal (ttyd). A Go supervisor manages ttyd, exposes health and status API endpoints for TrueNAS health probes, and tests Ollama connectivity at startup. The container never touches source disks; it operates exclusively on image files stored in the mounted ZFS dataset.
+`joanmarcriera/hdd-forensics` is the analysis half of a two-machine recovery workflow. The acquisition machine (Optiplex/Kali) images source HDDs with ddrescue and transfers the raw `.img` files to a TrueNAS SCALE NAS over SSH. This container runs on TrueNAS and provides the full forensics toolchain — sleuthkit, bulk_extractor, foremost, scalpel, PhotoRec, ext4magic, extundelete, tesseract-ocr, recoll, exiftool, yara, regripper, rifiuti2, plaso, poppler-utils, and the project's analysis scripts — accessible through a browser-based terminal (ttyd). A Go supervisor manages ttyd, exposes health and status API endpoints for TrueNAS health probes, and tests Ollama connectivity at startup. The container never touches source disks; it operates exclusively on image files stored in the mounted ZFS dataset.
+
+---
+
+## Toolchain Reference
+
+Each tool below has a dedicated analysis script in `bin/`. All scripts follow the same pattern: preview mode by default, `--run` to execute, `scan_runs` DB row for tracking. The TUI wires them all up — see **stage descriptions** in the TUI for runtime hints and links.
+
+### Disk Imaging
+
+| Tool | Script | Purpose |
+|------|--------|---------|
+| **ddrescue** | `ddrescue-run.sh` | Primary disk imager — bad-sector-aware, map-resumable |
+| **safecopy** | `image-safecopy-run.sh` | Alternative imager for disks ddrescue cannot handle |
+
+Homepage: https://www.gnu.org/software/ddrescue/
+
+### Filesystem Analysis
+
+| Tool | Script | Purpose |
+|------|--------|---------|
+| **sleuthkit / fiwalk** | `image-index-tsk.sh` | Filesystem-aware file inventory (paths, inodes, timestamps) |
+| **fdisk / parted / mmls** | `image-structure-scan.sh` | Partition layout and sector geometry |
+
+Homepage: https://www.sleuthkit.org/
+
+### Carving
+
+| Tool | Script | Purpose |
+|------|--------|---------|
+| **foremost** | `image-carve.sh --method foremost` | Broad signature-based carving |
+| **scalpel** | `image-carve.sh --method scalpel` | Tuned wallet/doc carving |
+| **recoverjpeg** | `image-carve.sh --method recoverjpeg` | Fast JPEG-only carving |
+| **magicrescue** | `image-carve.sh --method magicrescue` | Recipe-based carving (SQLite, ZIP, MP3, …) |
+| **PhotoRec** | `image-photorec-run.sh` | Broadest carver — most file types from unallocated space |
+
+### Filesystem-Specific Recovery
+
+| Tool | Script | When to use |
+|------|--------|------------|
+| **extundelete / ext4magic** | `image-ext-recover.sh` | ext3/ext4 journal-aware deleted file recovery |
+| **ntfsundelete** | `image-ntfs-recover.sh` | NTFS deleted file recovery |
+| **fatcat** | `image-fat-recover.sh` | FAT/exFAT recovery (camera cards, USB sticks) |
+| **xfs_undelete** | `image-xfs-recover.sh` | XFS deleted file recovery (install separately) |
+| **btrfs restore** | `image-btrfs-recover.sh` | Btrfs partition recovery |
+
+### Deep Extraction
+
+| Tool | Script | Purpose |
+|------|--------|---------|
+| **bulk_extractor** | `image-bulk-extractor.sh` | Extract email, URLs, crypto addresses, hex keys, wordlist, Outlook fragments |
+| **tesseract-ocr** | `image-ocr-seed-scan.py` | OCR recovered images for BIP39 seed phrases |
+| **pdftotext (poppler-utils)** | `image-pdf-extract.sh` | Extract text from recovered PDFs; scan for BIP39 seeds |
+| **recoll** | `image-index-recoll.sh` | Full-text search index over recovered corpus (opt-in) |
+
+Homepage (bulk_extractor): https://github.com/simsong/bulk_extractor  
+Homepage (poppler): https://poppler.freedesktop.org
+
+---
+
+### exiftool — EXIF Photo Enrichment
+
+**Script:** `bin/image-enrich-photos.sh`  
+**Installed:** `libimage-exiftool-perl`  
+**Homepage:** https://exiftool.org
+
+Runs exiftool on every recovered image artifact and writes structured metadata to the database:
+
+- Populates `picture_candidates.camera_model`, `taken_at`, `width`, `height`
+- Writes GPS coordinates to the `findings` table (`source_tool=exiftool`, `category=gps`)
+- Writes camera make/model and capture timestamp as informational findings
+
+GPS coordinates are high-value: a photo of a seed phrase backup carries the device's location and timestamp, confirming its origin.
+
+**Output:**
+```
+exports/hits/exiftool/gps_hits.tsv   — lat/lon per artifact with GPS data
+findings table                        — all EXIF fields extracted
+```
+
+**Query after running:**
+```bash
+bin/image-query.sh <db> findings exiftool
+bin/image-query.sh <db> findings-summary
+```
+
+<!-- TODO: add thumbnail gallery view of GPS-tagged photos in the web UI -->
+
+---
+
+### YARA — Wallet & Key Pattern Matching
+
+**Script:** `bin/image-yara-scan.sh`  
+**Installed:** `yara` (apt)  
+**Homepage:** https://virustotal.github.io/yara/
+
+Runs YARA rule files against the recovered corpus. Rules live in `config/yara/`:
+
+| Rule file | Rules |
+|-----------|-------|
+| `wallets.yar` | Ethereum keystore, Electrum JSON, MetaMask vault, Bitcoin Core wallet.dat, Exodus, Trust Wallet |
+| `crypto_keys.yar` | BIP32 xpub/xprv, WIF private keys, PEM-armored keys, BIP39 seed word clusters |
+
+Results are written to:
+- `findings` table (`source_tool=yara`, `category=wallet`)
+- `wallet_candidates` for matches with score ≥ 65
+- `hits/yara/<timestamp>/hits.tsv`
+
+**Adding custom rules:** drop `.yar` files in `config/yara/` — they are picked up automatically.
+
+**Query after running:**
+```bash
+bin/image-query.sh <db> findings yara
+```
+
+<!-- TODO: add Ethereum address regex rule (currently handled by bulk_extractor accts scanner) -->
+<!-- TODO: add rule for Monero wallet seeds (25 words, different wordlist) -->
+
+---
+
+### pdftotext (poppler-utils) — PDF Seed Extraction
+
+**Script:** `bin/image-pdf-extract.sh`  
+**Installed:** `poppler-utils` (apt)  
+**Homepage:** https://poppler.freedesktop.org
+
+Extracts text from all recovered PDF artifacts and scans for BIP39 seed phrases using the same run-length algorithm as the OCR scanner.
+
+Wallet software that exports PDFs:
+- Electrum paper wallet exports
+- Hardware wallet setup guides (Ledger Live, Trezor Suite)
+- MetaMask Secret Recovery Phrase printouts
+
+High-confidence hits (≥ 12 consecutive BIP39 words) are written to:
+- `wallet_candidates` table
+- `notes` table (for immediate visibility)
+
+**Query after running:**
+```bash
+bin/image-query.sh <db> findings pdf-extract
+```
+
+<!-- TODO: extend to scan recovered .txt / .html / .rtf files with same BIP39 algorithm -->
+
+---
+
+### RegRipper — Windows Registry Analysis
+
+**Script:** `bin/image-regripper.sh`  
+**Installed:** `regripper` (apt)  
+**Homepage:** https://github.com/keydet89/RegRipper3.0
+
+Processes Windows registry hive files found in the recovered corpus. Relevant hives:
+
+| Hive | Contains |
+|------|---------|
+| `NTUSER.DAT` | Per-user: MRU lists, recently opened files, UserAssist, shellbags |
+| `SOFTWARE` | Installed applications, browser config, registered file extensions |
+| `SYSTEM` | USB device history, network shares, services |
+| `SAM` | Local user accounts and password hashes |
+
+**Interest keywords:** bitcoin, btc, electrum, wallet, crypto, ledger, trezor, seed, mnemonic, private key, passphrase.
+
+**Output directory:** `exports/structure/registry/`
+```
+*.rip.txt           — full RegRipper output per hive
+*.interesting.txt   — lines matching crypto/wallet keywords
+summary.tsv         — hive processing summary
+```
+
+**Query after running:**
+```bash
+bin/image-query.sh <db> findings regripper
+```
+
+<!-- TODO: parse UserAssist for wallet software execution counts and timestamps -->
+<!-- TODO: extract Shellbags (folder access history) from NTUSER.DAT UsrClass.dat -->
+
+---
+
+### rifiuti2 — Windows Recycle Bin Analysis
+
+**Script:** `bin/image-rifiuti.sh`  
+**Installed:** `rifiuti2` (apt)  
+**Homepage:** https://abelcheung.github.io/rifiuti2/
+
+Parses Windows Recycle Bin metadata to recover original file paths and deletion timestamps for files the user deleted. Two formats supported:
+
+- **INFO2** — Windows 98 through XP (`C:\RECYCLER\S-...\INFO2`)
+- **$I files** — Windows Vista and later (`C:\$Recycle.Bin\S-...\$IXXXXXX`)
+
+High-interest deletions (Bitcoin, wallet, seed, bank keywords) receive score 70; others score 20.
+
+**Output directory:** `exports/structure/recycle-bin/`
+```
+all_deleted_files.tsv   — original path + deletion time for every recovered entry
+*.tsv                   — per-file rifiuti2 output
+```
+
+**Query after running:**
+```bash
+bin/image-query.sh <db> findings rifiuti2
+```
+
+<!-- TODO: cross-reference deleted file paths with TSK index to find if the file was also seen allocated -->
+
+---
+
+### plaso / log2timeline — Super-Timeline
+
+**Script:** `bin/image-plaso.sh`  
+**Installed:** `python3-plaso` (apt)  
+**Homepage:** https://plaso.readthedocs.io
+
+Generates a comprehensive unified timeline from the recovered corpus using `log2timeline.py`. Unlike `image-timeline.sh` (which only covers scan_runs + TSK file timestamps), plaso parses 50+ artifact types:
+
+- File system timestamps (atime/mtime/ctime/crtime)
+- Windows LNK shortcut files
+- Windows prefetch records (program execution evidence)
+- EXIF metadata from images
+- Browser history (Chrome, Firefox, IE)
+- Recycle Bin entries
+- Shellbags, recently accessed folders
+
+**Output directory:** `exports/timeline/`
+```
+<basename>.plaso         — plaso binary storage file
+<basename>.plaso.sqlite  — sortable timeline as SQLite
+```
+
+**Direct query of the plaso SQLite:**
+```bash
+sqlite3 exports/timeline/<basename>.plaso.sqlite \
+  "SELECT datetime, source_short, filename, description
+   FROM log_line
+   WHERE filename LIKE '%wallet%' OR description LIKE '%bitcoin%'
+   ORDER BY datetime"
+```
+
+**Modes:**
+- Default: runs against `exports/recovered/` (fast — minutes to hours)
+- `--full`: runs against raw image (very slow — many hours)
+
+<!-- TODO: import top plaso events into the main analysis DB findings table for unified querying -->
+<!-- TODO: add psort filter preset for crypto/wallet keywords to generate a focused timeline -->
+<!-- TODO: expose plaso SQLite file path in TUI detail panel once it exists -->
 
 ---
 

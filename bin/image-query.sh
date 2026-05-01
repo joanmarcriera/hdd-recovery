@@ -10,6 +10,8 @@ Commands:
   summary
   wallets
   pictures
+  findings [tool]          all findings, or filtered by source_tool
+  findings-summary         count + top score per tool and category
   files-like <pattern>
   artifacts <method>
   sql <statement>
@@ -34,6 +36,7 @@ SELECT COUNT(*) AS files FROM files;
 SELECT COUNT(*) AS wallet_candidates FROM wallet_candidates;
 SELECT COUNT(*) AS picture_candidates FROM picture_candidates;
 SELECT COUNT(*) AS recovered_artifacts FROM recovered_artifacts;
+SELECT COUNT(*) AS findings FROM findings;
 EOF
     ;;
   wallets)
@@ -54,6 +57,36 @@ SELECT pc.score, pc.reason, f.path, f.size_bytes
 FROM picture_candidates pc
 JOIN files f ON f.id = pc.file_id
 ORDER BY pc.score DESC, f.path;
+EOF
+    ;;
+  findings)
+    if [[ -n "$arg" ]]; then
+      sqlite3 "$db_ro" <<EOF
+.headers on
+.mode column
+SELECT source_tool, category, key, value, score, path, created_at
+FROM findings
+WHERE source_tool = '$(printf "%s" "$arg" | sed "s/'/''/g")'
+ORDER BY score DESC, key;
+EOF
+    else
+      sqlite3 "$db_ro" <<'EOF'
+.headers on
+.mode column
+SELECT source_tool, category, key, value, score, path, created_at
+FROM findings
+ORDER BY score DESC, source_tool, category;
+EOF
+    fi
+    ;;
+  findings-summary)
+    sqlite3 "$db_ro" <<'EOF'
+.headers on
+.mode column
+SELECT source_tool, category, COUNT(*) AS count, MAX(score) AS top_score
+FROM findings
+GROUP BY source_tool, category
+ORDER BY top_score DESC, count DESC;
 EOF
     ;;
   files-like)

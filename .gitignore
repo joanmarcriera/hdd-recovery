@@ -26,6 +26,9 @@ recovered/
 indexes/
 reports/
 
+# Docker env file contains credentials — never commit
+docker/.env
+
 # OS / editor noise
 .DS_Store
 Thumbs.db

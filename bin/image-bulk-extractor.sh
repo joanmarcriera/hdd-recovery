@@ -59,10 +59,17 @@ fi
 mkdir -p "$scope_dir"
 
 {
+  # Enable extra scanners not on by default:
+  #   wordlist — all tokenisable words (feed to john/hashcat as candidate list)
+  #   base16   — hex-encoded strings ≥8 bytes (catches hex private keys)
+  #   outlook  — Outlook PST/OST email fragments
+  _BE_EXTRA="-e wordlist -e base16 -e outlook"
   if [[ "$scope" == "recovered" ]]; then
-    bulk_extractor -o "$scope_dir" -R "$target"
+    # shellcheck disable=SC2086
+    bulk_extractor -o "$scope_dir" $_BE_EXTRA -R "$target"
   else
-    bulk_extractor -o "$scope_dir" "$target"
+    # shellcheck disable=SC2086
+    bulk_extractor -o "$scope_dir" $_BE_EXTRA "$target"
   fi
 } 2>&1 | tee "$log_path"
 

@@ -1,6 +1,7 @@
 """Multi-disk overview dashboard."""
 from __future__ import annotations
 
+from rich.markup import escape
 from rich.text import Text
 from textual import on, work
 from textual.app import ComposeResult
@@ -70,7 +71,7 @@ class DashboardScreen(Screen):
         from screens.webserver import server_pid, server_url
         subtitle = self.query_one("#subtitle", Label)
         pid = server_pid()
-        web_hint = f"  │  [green]Web UI ●[/green] {server_url()}" if pid else ""
+        web_hint = f"  │  [green]Web UI ●[/green] {escape(server_url())}" if pid else ""
         if not disks:
             subtitle.update(f"No disks found — N to add, W web server, K backup{web_hint}")
             return

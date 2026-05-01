@@ -388,12 +388,16 @@ def get_stage_status(disk: DiskInfo, stage: StageDef) -> StageStatus:  # noqa: C
 
     # ── Manual/wizard stages ──────────────────────────────────────────────
     if key in ("identify-source", "create-job-config"):
-        return StageStatus.DONE if disk.conf_path and disk.conf_path.exists() else StageStatus.PENDING
+        if disk.conf_path and disk.conf_path.exists():
+            return StageStatus.DONE
+        # Image already exists → these steps ran before this session
+        return StageStatus.DONE if disk.image_exists else StageStatus.PENDING
 
     if key == "ddrescue-preview":
-        if not disk.conf_path:
-            return StageStatus.PENDING
-        return StageStatus.DONE if disk.image_exists else StageStatus.PENDING
+        # Image already exists → the preview and first pass already ran
+        if disk.image_exists:
+            return StageStatus.DONE
+        return StageStatus.DONE if disk.conf_path else StageStatus.PENDING
 
     # ── ddrescue phases ───────────────────────────────────────────────────
     ddrescue_live = stage.pgrep_pattern and is_process_live(stage.pgrep_pattern, disk)
@@ -402,22 +406,27 @@ def get_stage_status(disk: DiskInfo, stage: StageDef) -> StageStatus:  # noqa: C
         if ddrescue_live:
             return StageStatus.RUNNING
         if not disk.map_exists:
-            return StageStatus.PENDING
+            # No map — if image exists it was acquired somehow, call it done
+            return StageStatus.DONE if disk.image_exists else StageStatus.PENDING
         if disk.map_coverage_pct is not None:
             return StageStatus.DONE if disk.map_coverage_pct >= 99.0 else StageStatus.PARTIAL
         return StageStatus.DONE if disk.image_exists else StageStatus.PARTIAL
 
     if key == "ddrescue-map-status":
-        return StageStatus.DONE if disk.map_exists else StageStatus.PENDING
+        if not disk.map_exists:
+            return StageStatus.SKIPPED if disk.image_exists else StageStatus.PENDING
+        return StageStatus.DONE
 
     if key == "ddrescue-mapview":
-        return StageStatus.DONE if disk.map_exists else StageStatus.PENDING
+        if not disk.map_exists:
+            return StageStatus.SKIPPED if disk.image_exists else StageStatus.PENDING
+        return StageStatus.DONE
 
     if key in ("ddrescue-retry", "ddrescue-reverse", "ddrescue-retrim"):
         if ddrescue_live:
             return StageStatus.RUNNING
         if not disk.map_exists:
-            return StageStatus.PENDING
+            return StageStatus.SKIPPED if disk.image_exists else StageStatus.PENDING
         if disk.map_coverage_pct is not None and disk.map_coverage_pct >= 99.9:
             return StageStatus.SKIPPED
         return StageStatus.PENDING

@@ -9,6 +9,8 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
+from rich.markup import escape
+
 from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
@@ -129,7 +131,7 @@ class WizardScreen(Screen):
     .field-row { height: 3; margin-bottom: 1; }
     .field-label { width: 22; padding-top: 1; }
     Input { width: 1fr; }
-    #blocked-warn { color: bold red; }
+    #blocked-warn { color: red; text-style: bold; }
     #btn-row { height: 3; margin-top: 1; }
     """
 
@@ -168,7 +170,7 @@ class WizardScreen(Screen):
         for dev in self._devs:
             blocked = dev.name in _BLOCKED
             mark = " [bold red]BLOCKED[/bold red]" if blocked else ""
-            label = f"[cyan]/dev/{dev.name}[/cyan]  {dev.size_human}  {dev.model or '(no model)'}  serial={dev.serial or '?'}{mark}"
+            label = f"[cyan]/dev/{dev.name}[/cyan]  {dev.size_human}  {escape(dev.model or '(no model)')}  serial={escape(dev.serial or '?')}{mark}"
             lv.append(ListItem(Label(label)))
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
@@ -190,9 +192,9 @@ class WizardScreen(Screen):
         warn.update("")
 
         self.query_one("#dev-info", Static).update(
-            f"[bold]{dev.path}[/bold]  {dev.size_human}  {dev.model}  "
-            f"serial={dev.serial}  tran={dev.tran}\n"
-            f"by-path: [dim]{dev.by_path or '(not found in /dev/disk/by-path)'}[/dim]"
+            f"[bold]{dev.path}[/bold]  {dev.size_human}  {escape(dev.model)}  "
+            f"serial={escape(dev.serial)}  tran={escape(dev.tran)}\n"
+            f"by-path: [dim]{escape(dev.by_path or '(not found in /dev/disk/by-path)')}[/dim]"
         )
 
         today = date.today().strftime("%Y%m%d")
