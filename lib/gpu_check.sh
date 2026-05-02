@@ -62,12 +62,16 @@ PY
 
 require_nvidia_gpu() {
   local name
-  name="$(_require_hashcat_gpu 0)"
+  if ! name="$(_require_hashcat_gpu 0)"; then
+    return 1
+  fi
   printf 'NVIDIA GPU detected: %s\n' "$name"
 }
 
 require_cuda() {
   local name
-  name="$(_require_hashcat_gpu 1)"
+  if ! name="$(_require_hashcat_gpu 1)"; then
+    return 1
+  fi
   printf 'NVIDIA CUDA GPU detected: %s\n' "$name"
 }

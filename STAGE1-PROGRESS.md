@@ -23,7 +23,7 @@ Status: complete
 Notes: Docker build, pywallet import, real wallet fixtures, and loop-device raw scan require owner verification in an environment with Docker/network, fixtures, and loop privileges. The Dockerfile pins Great-Software-Company/pywallet to `5376a54a36f75cec7226de7cca1511e9cf058f37`.
 
 ## T2 — john + hashcat install + GPU preflight helper
-Commit: pending
+Commit: 571a797
 Status: complete
 
 - [pending-owner-verification] `hashcat --version` works inside the container — see tests/smoke/T2-gpu-check.sh
@@ -33,3 +33,15 @@ Status: complete
 - [pending-owner-verification] `bitcoin2john.py` is on PATH or at a known path inside the container (`/usr/share/john/bitcoin2john.py` per the host install) — see tests/smoke/T2-gpu-check.sh
 
 Notes: Local CPU-only check exited 1 with the helper's hard-fail diagnostic. Docker build and GPU-positive verification are pending owner hardware/container validation.
+
+## T3 — image-crack-wallet.sh
+Commit: pending
+Status: complete
+
+- [pass] Without `--run`, prints the `bitcoin2john` and `hashcat` commands it would execute, plus the GPU detection result
+- [pending-owner-verification] With `--run` on a DB containing one encrypted wallet.dat: produces a `crack_tasks` row, runs hashcat, updates row to `cracked` or `exhausted` — see tests/smoke/T3-crack-wallet.sh
+- [pending-owner-verification] Ctrl-C during a run leaves the task in `paused` state with `checkpoint_path` set — see tests/smoke/T3-crack-wallet.sh
+- [pending-owner-verification] Re-running the script finds the paused task and resumes from the checkpoint — see tests/smoke/T3-crack-wallet.sh
+- [pass] On a host without `--gpus all`: refuses to run unless `--cpu-fallback` was passed
+
+Notes: Local verification used a synthetic encrypted wallet_keys row to confirm dry-run output and no-GPU hard refusal. Full cracking, pause, and resume need a weak encrypted wallet fixture plus GPU/container execution.

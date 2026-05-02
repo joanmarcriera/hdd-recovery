@@ -1,0 +1,1 @@
+/mnt/recovery16tb/recovery/exports/CURRENT_IMAGE/indexes/bulk_extractor_raw/wordlist.txt
