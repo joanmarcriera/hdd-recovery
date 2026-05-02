@@ -16,6 +16,7 @@ ENV LC_ALL=C.UTF-8
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Core utilities
     bash curl wget ca-certificates git procps pv jq file lsof \
+    build-essential libdb-dev python3-dev libssl-dev libffi-dev \
     # Disk & filesystem
     ddrescue parted gdisk util-linux btrfs-progs xfsprogs dosfstools \
     # Forensics
@@ -40,6 +41,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Super-timeline (log2timeline.py / psort.py)
     python3-plaso \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ── pywallet (GSC Python 3 fork) ─────────────────────────────────────────────
+ARG PYWALLET_COMMIT=5376a54a36f75cec7226de7cca1511e9cf058f37
+RUN git clone https://github.com/Great-Software-Company/pywallet.git /opt/pywallet \
+    && cd /opt/pywallet \
+    && git checkout "$PYWALLET_COMMIT" \
+    && python3 -m pip install --break-system-packages bsddb3 ecdsa pycryptodome \
+    && printf '%s\n' \
+      'from setuptools import setup' \
+      'setup(name="pywallet-gsc", version="2.3", py_modules=["pywallet"])' \
+      > setup.py \
+    && python3 -m pip install --break-system-packages -e . \
+    && chmod +x /opt/pywallet/pywallet.py /opt/pywallet/run_pywallet.sh \
+    && ln -sf /opt/pywallet/run_pywallet.sh /usr/local/bin/pywallet \
+    && python3 -c 'import pywallet'
 
 # ── ttyd: download static binary (not in Kali apt) ───────────────────────────
 RUN ARCH=$(dpkg --print-architecture) && \
