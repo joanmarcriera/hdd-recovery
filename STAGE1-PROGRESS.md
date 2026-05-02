@@ -77,9 +77,17 @@ Status: complete
 Notes: Local checks covered shell syntax and dry-run. TrID itself is installed from mark0.net during Docker build, which is pending owner verification in the container environment. The script intentionally never invokes TrID `--ae`.
 
 ## T7a — Extract Windows memory artifacts
-Commit: pending
+Commit: e28c0b9
 Status: complete
 
 - [pending-owner-verification] A Windows image yields hiberfil.sys + pagefile.sys at `<export_root>/winmem/`, registered in `recovered_artifacts` — see tests/smoke/T7a-extract-winmem.sh
 
 Notes: Local checks covered shell syntax, help output, and dry-run on an empty DB. Real extraction requires a TSK-indexed Windows image fixture.
+
+## T7b — Volatility3 scan
+Commit: pending
+Status: complete
+
+- [pending-owner-verification] Against a known-good Windows hiberfil.sys test fixture, the scan completes and produces findings rows. (Use a small synthetic memory dump if a real fixture is unavailable.) — see tests/smoke/T7b-volatility.sh
+
+Notes: Local checks covered shell syntax, help output, and dry-run on an empty DB. Real Volatility3 execution requires Docker/container tooling and winmem-extract artifacts from T7a.

@@ -61,6 +61,9 @@ RUN git clone https://github.com/Great-Software-Company/pywallet.git /opt/pywall
 # ── btcrecover ───────────────────────────────────────────────────────────────
 RUN python3 -m pip install --break-system-packages btcrecover
 
+# ── Volatility3 ──────────────────────────────────────────────────────────────
+RUN python3 -m pip install --break-system-packages volatility3
+
 # ── TrID file identifier ─────────────────────────────────────────────────────
 ARG TRID_VERSION=2.47
 ARG TRID_DEFS_DATE=20260414
