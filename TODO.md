@@ -39,48 +39,45 @@ All above are in the TUI under the appropriate stage numbers. All require `docke
 
 ---
 
+## Toolchain — Implemented (Stage 1, 2026-05-02)
+
+| Ticket | Tool / capability | Script / file | Status |
+|--------|-------------------|---------------|--------|
+| T0 | Schema migrations, `crack_tasks`, `wallet_keys`, artifact enrichment columns | `lib/common.sh`, `sql/analysis-schema.sql` | done |
+| T1 | pywallet wallet.dat inspection | `bin/image-wallet-inspect.sh` | done |
+| T2 | john + hashcat + GPU preflight | `lib/gpu_check.sh` | done |
+| T3 | Wallet.dat cracking with john/hashcat tooling | `bin/image-crack-wallet.sh` | done |
+| T4 | BTCRecover partial seed/password wrapper | `bin/image-btcrecover.sh` | done |
+| T5 | Text BIP39 scanner and shared seed logic | `lib/seed_scan.py`, `bin/image-text-seed-scan.sh` | done |
+| T6 | TrID enrichment without file renames | `bin/image-enrich-trid.sh` | done |
+| T7a | Windows memory artifact extraction | `bin/image-extract-winmem.sh` | done |
+| T7b | Volatility3 focused scan | `bin/image-volatility-scan.sh` | done |
+| T8 | Perceptual image dedup via pHash | `bin/image-dedup-photos.sh` | done |
+| T9 | Automated picture quality scoring | `bin/image-enrich-photos.sh` | done |
+| T10 | KeePass KDBX cracking | `bin/image-crack-keepass.sh` | done |
+| T11 | Plaso crypto timeline import/filter | `bin/image-plaso.sh` | done |
+| T12 | TUI entries for Stage 1 tools | `tui/stages.py` | done |
+
+### Stage 1 status
+
+- T0 — complete; local schema checks passed.
+- T1 — complete; wallet fixture, Docker, and loop-device smoke checks pending owner verification.
+- T2 — complete; GPU-positive and container package checks pending owner verification.
+- T3 — complete; encrypted wallet cracking/pause/resume smoke checks pending owner verification.
+- T4 — complete; real BTCRecover seed recovery smoke check pending owner verification.
+- T5 — complete; text scanner smoke passed, OCR/PDF fixture regression pending owner verification.
+- T6 — complete; TrID container execution pending owner verification.
+- T7a — complete; Windows image extraction fixture pending owner verification.
+- T7b — complete; Volatility3 fixture execution pending owner verification.
+- T8 — complete; imagehash container smoke pending owner verification.
+- T9 — complete; quality scoring smoke passed with synthetic images, real photo check pending owner verification.
+- T10 — complete; KeePass fixture/GPU smoke pending owner verification.
+- T11 — complete; plaso fixture execution pending owner verification.
+- T12 — complete; import checks passed, interactive TUI launch pending owner verification.
+
 ## Toolchain — Remaining (not yet implemented)
 
-### john + hashcat + bitcoin2john — wallet cracking
-Closes the gap between *finding* wallet.dat and *recovering* from it. `bitcoin2john.py` is already on the host at `/usr/share/john/bitcoin2john.py`.
-
-**Dockerfile:** add `john john-data hashcat hashcat-data`  
-**Script needed:** `bin/image-crack-wallet.sh`  
-  1. Run `bitcoin2john.py` on each wallet.dat in `wallet_candidates`  
-  2. Pass hash to john with rockyou wordlist, then with the bulk_extractor wordlist output  
-  3. Write cracked passwords to `scan_runs` notes and `notes` table  
-**TUI stage:** key `crack-wallets`, optional, after `yara-scan`
-
-### btcrecover — partial BIP39 seed recovery
-For when OCR finds 10 of 12 words, or words are scrambled/misread.
-
-**Install:** `pip install btcrecover`  
-**TUI stage:** key `btcrecover`, is_manual=True with usage instructions, after `crack-wallets`  
-Homepage: https://github.com/3rdIteration/btcrecover
-
-### Plain-text BIP39 scanner
-Scan recovered `.txt`, `.html`, `.md`, `.rtf`, `.csv` files for BIP39 word runs. Same
-algorithm as `image-ocr-seed-scan.py` and `image-pdf-extract.sh`.
-
-**Script needed:** `bin/image-text-seed-scan.sh`  
-**TUI stage:** key `text-seed-scan`, optional, after `pdf-extract` (stage 25)
-
-### Photo deduplication (perceptual hash)
-PhotoRec + foremost + recoverjpeg produce thousands of near-duplicate images.
-`pip install imagehash` (Pillow already present). Group by pHash distance < 10.
-
-**Script needed:** `bin/image-dedup-photos.sh`  
-**Schema addition:** `ALTER TABLE recovered_artifacts ADD COLUMN dedup_cluster_id INTEGER`  
-**TUI stage:** key `dedup-photos`, optional, after `enrich-photos` (stage 18)
-
-### Import plaso events into `findings` table
-After `image-plaso.sh` produces its SQLite, import wallet-keyword matching events
-into the main `findings` table for unified querying.  
-Implement as a post-processing step inside `image-plaso.sh`.
-
-### psort filter preset for crypto keywords
-After `log2timeline`, run `psort.py` with a message filter for bitcoin/wallet/seed/ledger to
-produce a focused sub-timeline alongside the full one.
+No Stage 1 wallet, seed, deduplication, or plaso keyword-filter items remain in this section.
 
 ---
 
@@ -113,7 +110,7 @@ produce a focused sub-timeline alongside the full one.
 | `pywallet` | Bitcoin Core `wallet.dat` inspector and key extractor |
 | `bitcoin-wallet` (Core CLI) | Dump keys from a salvaged wallet.dat |
 | `electrum --offline` | Can open and inspect various wallet formats |
-| `btcrecover` | Brute-force / mnemonic recovery for partially-known passphrases |
+| `BTCRecover` | Brute-force / mnemonic recovery for partially-known passphrases |
 | `hashcat` | GPU-accelerated password recovery for encrypted wallet files |
 | `keepassxc-cli` | If KeePass databases are found, inspect structure and attempt recovery |
 
@@ -131,9 +128,7 @@ produce a focused sub-timeline alongside the full one.
 
 ## Analysis pipeline
 
-- **Automated picture quality scoring** — run `imagemagick identify` or a lightweight BRISQUE/NIQE model on recovered images and rank by estimated quality (avoids reviewing blurry/corrupt files first).
 - **Face detection pass** — use a local model (e.g. `dlib` or OpenCV Haar cascade) to flag images containing faces; useful for quickly finding personal photos.
-- **Duplicate image detection** — perceptual hash (`pHash` via `imagehash`) across all recovered images to group near-duplicates before export.
 - **Email / contact extraction** — bulk_extractor already pulls email addresses; add a stage that imports `email.txt` hits and cross-references with found `.pst` / `mbox` / `Thunderbird` profile paths.
 - **Cryptocurrency address validation** — after bulk_extractor finds address-like strings, validate checksum and classify by coin type (BTC, ETH, LTC, etc.).
 - **Timeline report** — **done** (`bin/image-timeline.sh`); outputs JSON/CSV/table from `scan_runs`, `files`, and `recovered_artifacts`.

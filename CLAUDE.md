@@ -108,6 +108,15 @@ Every bin script sources this. Key functions:
 | `bin/image-detect-wallets.sh <db>` | Scores files against wallet keywords/extensions; populates `wallet_candidates` |
 | `bin/image-detect-pictures.sh <db>` | Scores files for picture extensions/paths; populates `picture_candidates` |
 
+### Wallet Recovery
+
+| Script | Purpose |
+|--------|---------|
+| `bin/image-wallet-inspect.sh <db> --run` | pywallet inspection of wallet.dat candidates; writes `wallet_keys` and findings |
+| `bin/image-crack-wallet.sh <db> --run` | Manual bitcoin2john/hashcat wallet.dat cracking; GPU preflight required unless explicit CPU fallback |
+| `bin/image-btcrecover.sh <db> --config <yml> --run` | Operator-driven btcrecover for partial seed/password recovery; tracks `crack_tasks` |
+| `bin/image-crack-keepass.sh <db> --run` | KeePass KDBX cracking via keepass2john/hashcat or explicit keepass4brute CPU path |
+
 ### Analysis — Heavy Stages
 
 | Script | Purpose |
@@ -116,6 +125,12 @@ Every bin script sources this. Key functions:
 | `bin/image-bulk-extractor.sh <db> --scope raw\|recovered` | Run bulk_extractor on raw image or recovered corpus; backs up prior output with timestamp; imports hits into DB up to `BULK_HIT_LIMIT` |
 | `bin/image-carve.sh <db> --method foremost\|scalpel` | Carving pass; registers artifacts in DB afterward |
 | `bin/image-photorec-run.sh <db> --profile broad\|photos` | Unattended PhotoRec via `/cmd`; output under `recovered/photorec/<profile>-<timestamp>` |
+| `bin/image-text-seed-scan.sh <db> --run` | Scans recovered text-like files for BIP39 seed phrase runs |
+| `bin/image-enrich-trid.sh <db> --run` | TrID file-type enrichment stored in DB only; never renames carved files |
+| `bin/image-enrich-photos.sh <db> --run` | EXIF enrichment plus image `quality_score` population |
+| `bin/image-dedup-photos.sh <db> --run` | Per-image perceptual photo deduplication; marks cluster primaries |
+| `bin/image-extract-winmem.sh <db> --run` | Extracts `hiberfil.sys` and `pagefile.sys` to `winmem/` using TSK inode data |
+| `bin/image-volatility-scan.sh <db> --run` | Runs focused Volatility3 plugins over extracted Windows memory artifacts |
 | `bin/image-ntfs-artifact-summary.sh <db>` | Extracts Windows path/prefetch/MFT interest from raw bulk_extractor output; requires `--scope raw` to have run first |
 | `bin/image-index-recoll.sh <db> --path <dir>` | Full-text Recoll index over a recovered directory; disabled by default (`ENABLE_RECOLL=0`) |
 | `bin/image-bulk-discovery-run.sh <image>` | One-shot heavy pipeline runner |

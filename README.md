@@ -18,6 +18,9 @@ Designed for [TrueNAS SCALE](https://www.truenas.com/truenas-scale/) but works o
 - Carves deleted files with **foremost**, **scalpel**, **recoverjpeg**, and **magicrescue**
 - Recovers deleted ext3/4 files via **extundelete** and **ext4magic**
 - OCRs all recovered images with **Tesseract** and flags sequences of BIP-39 seed words
+- Inspects Bitcoin Core `wallet.dat` files with **pywallet** and tracks manual cracking jobs for **john**, **hashcat**, **btcrecover**, and **KeePass**
+- Enriches carved files with **TrID**, image quality scores, and perceptual photo deduplication
+- Extracts Windows `hiberfil.sys` / `pagefile.sys` and runs focused **Volatility3** memory scans
 - Keeps a per-image **SQLite** catalog of every stage: what ran, when, what it found
 - Exposes the full interactive **TUI** (Python Textual) via a browser-accessible terminal — no SSH required
 - Integrates with a local **Ollama** instance for LLM-assisted analysis
@@ -155,6 +158,21 @@ bin/image-ntfs-artifact-summary.sh $DB            # Windows/NTFS artifact summar
 
 # ── OCR seed phrase detection ─────────────────────────────────────────────────
 bin/image-ocr-seed-scan.py $DB      # OCR all recovered images, flag BIP-39 seeds
+bin/image-text-seed-scan.sh $DB --run # scan recovered text files for BIP-39 seeds
+
+# ── Wallet recovery (Wave A, manual cracking stages) ─────────────────────────
+bin/image-wallet-inspect.sh $DB --run      # pywallet wallet.dat inspection
+bin/image-crack-wallet.sh $DB --run        # bitcoin2john + hashcat -m 11300
+bin/image-btcrecover.sh $DB --config <yml> --run
+bin/image-crack-keepass.sh $DB --run       # keepass2john/hashcat or keepass4brute
+
+# ── Windows memory + review efficiency (Wave B) ──────────────────────────────
+bin/image-enrich-trid.sh $DB --run         # TrID guesses, no file renames
+bin/image-enrich-photos.sh $DB --run       # EXIF + quality_score
+bin/image-dedup-photos.sh $DB --run        # perceptual duplicate clusters
+bin/image-extract-winmem.sh $DB --run      # hiberfil.sys/pagefile.sys extraction
+bin/image-volatility-scan.sh $DB --run     # focused Volatility3 plugins
+bin/image-plaso.sh $DB --run               # full + crypto keyword timeline
 
 # ── Query results ─────────────────────────────────────────────────────────────
 bin/image-query.sh $DB summary
@@ -203,9 +221,14 @@ Always run the metadata-first path (TSK index → wallet/picture detection) befo
 | **Binary analysis** | `binwalk` |
 | **Metadata** | `exiftool`, `file`, `sqlite3`, `db5.3-util` (BerkeleyDB / `wallet.dat`) |
 | **OCR** | `tesseract-ocr` + English language data + BIP-39 wordlist |
+| **Wallet recovery** | `pywallet`, `john`, `bitcoin2john.py`, `hashcat`, `btcrecover`, `keepass2john`, `keepass4brute` |
+| **File identification/review** | `TrID`, `imagehash`, Pillow quality scoring |
+| **Windows memory** | `Volatility3` |
 | **Full-text index** | `recoll` (opt-in via `ENABLE_RECOLL=1`) |
 | **Terminal UI** | Python Textual app, served via `ttyd` |
 | **Process manager** | Go supervisor (manages ttyd, serves health API) |
+
+> **Cracking GPU setup:** hashcat stages require NVIDIA Container Toolkit and a container started with GPU access, for example `--gpus all`. The helper in `lib/gpu_check.sh` runs `hashcat -I` and hard-fails if no NVIDIA GPU is visible. This prevents silent CPU fallback, which can waste days.
 
 ---
 

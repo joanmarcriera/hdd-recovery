@@ -2,7 +2,7 @@
 
 ## Overview
 
-`joanmarcriera/hdd-forensics` is the analysis half of a two-machine recovery workflow. The acquisition machine (Optiplex/Kali) images source HDDs with ddrescue and transfers the raw `.img` files to a TrueNAS SCALE NAS over SSH. This container runs on TrueNAS and provides the full forensics toolchain — sleuthkit, bulk_extractor, foremost, scalpel, PhotoRec, ext4magic, extundelete, tesseract-ocr, recoll, exiftool, yara, regripper, rifiuti2, plaso, poppler-utils, and the project's analysis scripts — accessible through a browser-based terminal (ttyd). A Go supervisor manages ttyd, exposes health and status API endpoints for TrueNAS health probes, and tests Ollama connectivity at startup. The container never touches source disks; it operates exclusively on image files stored in the mounted ZFS dataset.
+`joanmarcriera/hdd-forensics` is the analysis half of a two-machine recovery workflow. The acquisition machine (Optiplex/Kali) images source HDDs with ddrescue and transfers the raw `.img` files to a TrueNAS SCALE NAS over SSH. This container runs on TrueNAS and provides the full forensics toolchain — sleuthkit, bulk_extractor, foremost, scalpel, PhotoRec, ext4magic, extundelete, tesseract-ocr, recoll, exiftool, yara, regripper, rifiuti2, plaso, poppler-utils, pywallet, john, hashcat, btcrecover, TrID, Volatility3, imagehash, and the project's analysis scripts — accessible through a browser-based terminal (ttyd). A Go supervisor manages ttyd, exposes health and status API endpoints for TrueNAS health probes, and tests Ollama connectivity at startup. The container never touches source disks; it operates exclusively on image files stored in the mounted ZFS dataset.
 
 ---
 
@@ -55,10 +55,36 @@ Homepage: https://www.sleuthkit.org/
 | **bulk_extractor** | `image-bulk-extractor.sh` | Extract email, URLs, crypto addresses, hex keys, wordlist, Outlook fragments |
 | **tesseract-ocr** | `image-ocr-seed-scan.py` | OCR recovered images for BIP39 seed phrases |
 | **pdftotext (poppler-utils)** | `image-pdf-extract.sh` | Extract text from recovered PDFs; scan for BIP39 seeds |
+| **text scanner** | `image-text-seed-scan.sh` | Scan recovered text-like files for BIP39 seeds |
 | **recoll** | `image-index-recoll.sh` | Full-text search index over recovered corpus (opt-in) |
 
 Homepage (bulk_extractor): https://github.com/simsong/bulk_extractor  
 Homepage (poppler): https://poppler.freedesktop.org
+
+---
+
+### Wallet Recovery and Cracking
+
+| Tool | Script | Purpose |
+|------|--------|---------|
+| **pywallet** | `image-wallet-inspect.sh` | Inspect `wallet.dat`, extract keys, and flag encrypted wallets |
+| **john / bitcoin2john / hashcat** | `image-crack-wallet.sh` | Manual Bitcoin Core wallet cracking, GPU-gated by `lib/gpu_check.sh` |
+| **btcrecover** | `image-btcrecover.sh` | Operator-driven partial seed or partial password recovery |
+| **keepass2john / keepass4brute** | `image-crack-keepass.sh` | KeePass KDBX cracking path selection and task tracking |
+
+Hashcat stages require NVIDIA GPU passthrough (`--gpus all`) and NVIDIA Container Toolkit. The scripts hard-fail on missing NVIDIA GPU instead of silently falling back to CPU.
+
+---
+
+### Review Efficiency and Windows Memory
+
+| Tool | Script | Purpose |
+|------|--------|---------|
+| **TrID** | `image-enrich-trid.sh` | Store top file-type guesses without renaming carved files |
+| **Pillow / image quality** | `image-enrich-photos.sh` | Populate EXIF and `quality_score` for recovered photos |
+| **imagehash** | `image-dedup-photos.sh` | Group near-duplicate photos and mark cluster primaries |
+| **TSK / icat** | `image-extract-winmem.sh` | Extract `hiberfil.sys` and `pagefile.sys` for memory analysis |
+| **Volatility3** | `image-volatility-scan.sh` | Focused Windows memory plugins and dumpfile registration |
 
 ---
 
@@ -143,8 +169,6 @@ High-confidence hits (≥ 12 consecutive BIP39 words) are written to:
 ```bash
 bin/image-query.sh <db> findings pdf-extract
 ```
-
-<!-- TODO: extend to scan recovered .txt / .html / .rtf files with same BIP39 algorithm -->
 
 ---
 
@@ -245,8 +269,6 @@ sqlite3 exports/timeline/<basename>.plaso.sqlite \
 - Default: runs against `exports/recovered/` (fast — minutes to hours)
 - `--full`: runs against raw image (very slow — many hours)
 
-<!-- TODO: import top plaso events into the main analysis DB findings table for unified querying -->
-<!-- TODO: add psort filter preset for crypto/wallet keywords to generate a focused timeline -->
 <!-- TODO: expose plaso SQLite file path in TUI detail panel once it exists -->
 
 ---
