@@ -30,6 +30,7 @@ class StageDef:
     is_optional: bool = False
     is_manual: bool = False         # operator must act; TUI shows instructions, no exec
     is_view_only: bool = False      # read-only command; no DB/disk changes
+    has_config_screen: bool = False # opens a config modal instead of ConfirmScreen
     requires_prior: list[str] = field(default_factory=list)
     auto_stdin: bytes = b""         # written to stdin after process starts (ddrescue --ask)
 
@@ -405,7 +406,7 @@ STAGES: list[StageDef] = [
             "[link=https://exiftool.org]exiftool by Phil Harvey[/link]"
         ),
         script="image-enrich-photos.sh",
-        args_template=["{db}"],
+        args_template=["{db}", "--run"],
         scan_run_key="enrich-photos",
         pgrep_pattern="exiftool",
         runtime_hint="1 – 20 min",
@@ -846,7 +847,7 @@ STAGES: list[StageDef] = [
             "[link=https://plaso.readthedocs.io]plaso / log2timeline documentation[/link]"
         ),
         script="image-plaso.sh",
-        args_template=["{db}"],
+        args_template=["{db}", "--run"],
         scan_run_key="plaso-timeline",
         pgrep_pattern="plaso-log2timeline",
         runtime_hint="30 min – 4 h",
@@ -897,6 +898,215 @@ STAGES: list[StageDef] = [
         rerunnable=True,
         requires_db_write=False,
         requires_prior=["index-tsk"],
+    ),
+    # ── LLM photo tagging ─────────────────────────────────────────────────
+    StageDef(
+        key="tag-photos",
+        number=39,
+        name="LLM Photo Tagging (llava)",
+        description=(
+            "Tag recovered images using a local Ollama vision model.\n\n"
+            "For each qualifying image the model writes a one-paragraph forensic\n"
+            "description stored in the findings table\n"
+            "(source_tool='llava', category='photo-description').\n\n"
+            "Already-tagged images are skipped automatically — safe to interrupt\n"
+            "and re-run. Progress is tracked in scan_runs.\n\n"
+            "Scopes:\n"
+            "  real  — JPEG files ≥ 20 KB only  (default, ~21 s/image)\n"
+            "  all   — any image/* type ≥ 10 KB  (includes web cache PNGs/BMPs)\n\n"
+            "Descriptions appear in the web gallery as hover overlays and can be\n"
+            "searched via the description search box at /gallery.\n\n"
+            "Requires: a running Ollama instance with the chosen model pulled:\n"
+            "  ollama pull llava:7b"
+        ),
+        script="image-tag-photos.py",
+        args_template=["{db}"],   # real args built by TagPhotosScreen config modal
+        scan_run_key="tag-photos",
+        pgrep_pattern="image-tag-photos",
+        runtime_hint="1 – 4 h",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        has_config_screen=True,
+        requires_prior=["detect-pictures"],
+        warning="Requires a running Ollama instance with llava:7b (or chosen model) pulled.",
+    ),
+    # ── Wallet inspection and cracking ────────────────────────────────────
+    StageDef(
+        key="wallet-inspect",
+        number=40,
+        name="pywallet Wallet Inspection",
+        description=(
+            "Inspect wallet.dat candidates with pywallet and record extracted keys "
+            "or encrypted-wallet placeholders in wallet_keys.\n\n"
+            "Outputs sensitive dumps under hits/wallet-inspect/."
+        ),
+        script="image-wallet-inspect.sh",
+        args_template=["{db}", "--run"],
+        scan_run_key="wallet-inspect",
+        pgrep_pattern="image-wallet-inspect|pywallet",
+        runtime_hint="1 – 20 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["detect-wallets"],
+    ),
+    StageDef(
+        key="crack-wallet",
+        number=41,
+        name="Crack Bitcoin wallet.dat",
+        description=(
+            "Manual cracking stage for encrypted Bitcoin Core wallet.dat files. "
+            "Uses bitcoin2john and hashcat -m 11300 with mandatory NVIDIA GPU; "
+            "john CPU fallback only runs when explicitly requested outside the TUI."
+        ),
+        script="image-crack-wallet.sh",
+        args_template=["{db}", "--run"],
+        scan_run_key="crack-wallet",
+        pgrep_pattern="image-crack-wallet|hashcat.*11300|john.*bitcoin",
+        runtime_hint="manual / long-running",
+        rerunnable=True,
+        requires_db_write=True,
+        warning="Manual cracking stage. Requires NVIDIA GPU; no silent CPU fallback.",
+        is_optional=True,
+        is_manual=True,
+        requires_prior=["wallet-inspect", "yara-scan", "detect-wallets"],
+    ),
+    StageDef(
+        key="btcrecover",
+        number=42,
+        name="btcrecover Partial Recovery",
+        description=(
+            "Manual btcrecover wrapper for partial BIP39 seed or partial password "
+            "recovery. Operator writes a config under state/btcrecover/ and runs "
+            "the wrapper with --config."
+        ),
+        script="image-btcrecover.sh",
+        args_template=["{db}"],
+        scan_run_key="btcrecover",
+        pgrep_pattern="image-btcrecover|btcrecover|seedrecover",
+        runtime_hint="manual / long-running",
+        rerunnable=True,
+        requires_db_write=True,
+        warning="Manual operator-driven stage. Prepare config before running.",
+        is_optional=True,
+        is_manual=True,
+        requires_prior=["init-db"],
+    ),
+    StageDef(
+        key="crack-keepass",
+        number=43,
+        name="Crack KeePass KDBX",
+        description=(
+            "Manual KeePass cracking for recovered .kdbx artifacts. KDBX 1-3 uses "
+            "hashcat -m 13400 with mandatory NVIDIA GPU; KDBX4 Argon2 CPU brute "
+            "force is opt-in only from the command line."
+        ),
+        script="image-crack-keepass.sh",
+        args_template=["{db}", "--run"],
+        scan_run_key="crack-keepass",
+        pgrep_pattern="image-crack-keepass|hashcat.*13400|keepass4brute",
+        runtime_hint="manual / long-running",
+        rerunnable=True,
+        requires_db_write=True,
+        warning="Manual cracking stage. Requires NVIDIA GPU for hashcat path.",
+        is_optional=True,
+        is_manual=True,
+        requires_prior=["carve-foremost", "carve-scalpel", "carve-recoverjpeg", "carve-magicrescue"],
+    ),
+    # ── Seed and file enrichment ──────────────────────────────────────────
+    StageDef(
+        key="text-seed-scan",
+        number=44,
+        name="Text Seed Phrase Scan",
+        description=(
+            "Scan recovered text-like files for consecutive BIP39 seed-word runs. "
+            "High-confidence 12+ word runs are also written to notes."
+        ),
+        script="image-text-seed-scan.sh",
+        args_template=["{db}", "--run"],
+        scan_run_key="text-seed-scan",
+        pgrep_pattern="image-text-seed-scan",
+        runtime_hint="1 – 30 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["carve-foremost", "carve-scalpel", "carve-recoverjpeg", "carve-magicrescue"],
+    ),
+    StageDef(
+        key="enrich-trid",
+        number=45,
+        name="TrID File Type Enrichment",
+        description=(
+            "Run TrID over recovered artifacts and store top guesses in SQLite. "
+            "This stage never uses --ae and never renames carved files."
+        ),
+        script="image-enrich-trid.sh",
+        args_template=["{db}", "--run"],
+        scan_run_key="enrich-trid",
+        pgrep_pattern="image-enrich-trid|trid",
+        runtime_hint="5 – 60 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["carve-foremost", "carve-scalpel", "carve-recoverjpeg", "carve-magicrescue"],
+    ),
+    StageDef(
+        key="dedup-photos",
+        number=46,
+        name="Photo Perceptual Dedup",
+        description=(
+            "Group near-duplicate recovered photos by perceptual hash and mark one "
+            "primary artifact per cluster. Does not move or delete files."
+        ),
+        script="image-dedup-photos.sh",
+        args_template=["{db}", "--run"],
+        scan_run_key="dedup-photos",
+        pgrep_pattern="image-dedup-photos",
+        runtime_hint="5 – 60 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["enrich-photos"],
+    ),
+    # ── Windows memory ────────────────────────────────────────────────────
+    StageDef(
+        key="extract-winmem",
+        number=47,
+        name="Extract Windows Memory Artifacts",
+        description=(
+            "Extract hiberfil.sys and pagefile.sys from the image using TSK inode "
+            "data and register the outputs under winmem/."
+        ),
+        script="image-extract-winmem.sh",
+        args_template=["{db}", "--run"],
+        scan_run_key="extract-winmem",
+        pgrep_pattern="image-extract-winmem|icat",
+        runtime_hint="5 – 60 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["index-tsk"],
+    ),
+    StageDef(
+        key="volatility3",
+        number=48,
+        name="Volatility3 Windows Memory Scan",
+        description=(
+            "Run focused Volatility3 plugins against winmem-extract outputs and "
+            "import process, command-line, credential, network, and dumpfile findings."
+        ),
+        script="image-volatility-scan.sh",
+        args_template=["{db}", "--run"],
+        scan_run_key="volatility3",
+        pgrep_pattern="image-volatility-scan|vol .*windows",
+        runtime_hint="30 min – 4 h",
+        rerunnable=True,
+        requires_db_write=True,
+        warning="Manual Windows memory analysis stage. Requires extracted winmem files.",
+        is_optional=True,
+        is_manual=True,
+        requires_prior=["extract-winmem"],
     ),
 ]
 

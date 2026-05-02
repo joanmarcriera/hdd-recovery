@@ -123,10 +123,21 @@ Status: complete
 Notes: Local dry-run used a synthetic KDBX4 header to confirm routing and clear CPU opt-in messaging. Hashcat and keepass4brute execution need fixtures and container/GPU verification. keepass4brute is pinned to `6e0b1a0e11daaa674653c5f15f8d06ba2164c335`.
 
 ## T11 — Plaso psort crypto-keyword filter
-Commit: pending
+Commit: 1a34f9d
 Status: complete
 
 - [pending-owner-verification] Running `image-plaso.sh` against a DB with an existing .plaso file produces both the full timeline (existing behavior) and the new crypto sub-timeline — see tests/smoke/T11-plaso-crypto.sh
 - [pending-owner-verification] `findings` table gains rows with `source_tool='plaso'` and `category='timeline'` — see tests/smoke/T11-plaso-crypto.sh
 
 Notes: Local checks covered shell syntax, help output, and dry-run. Real plaso execution requires container tools and a recovered corpus/plaso fixture.
+
+## T12 — TUI stage entries
+Commit: pending
+Status: complete
+
+- [pass] `python3 -c "from tui.stages import STAGES; print(len(STAGES))"` returns 38 + count-of-new-stages
+- [pending-owner-verification] Launching the TUI (`bin/tui.sh`) shows all new stages — see tests/smoke/T12-tui-stages.sh
+- [pass] Each new stage's `script` path resolves to an existing file in `bin/`
+- [pass] `requires_prior` keys all match an existing stage `key`
+
+Notes: The working tree already contained an uncommitted `tag-photos` stage 39 before T12, so local `len(STAGES)` is 48: that pre-existing stage plus the nine Stage 1 TUI entries. New Stage 1 entries are numbered 40-48 to avoid overwriting owner work.
