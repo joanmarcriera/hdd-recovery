@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Forensics
     sleuthkit testdisk bulk-extractor foremost scalpel \
     extundelete ext4magic recoverjpeg magicrescue binwalk dc3dd \
+    john john-data hashcat hashcat-data \
     # Metadata & databases
     libimage-exiftool-perl db5.3-util sqlite3 \
     # Python runtime (for inline scripts in existing bash tools)
