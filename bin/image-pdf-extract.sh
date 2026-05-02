@@ -54,10 +54,11 @@ run_id="$(record_scan_start "$db" "pdf-extract" "$0 $db" "$log_path" "$out_dir")
 status="ok"
 
 {
-python3 - "$db" "$out_dir" "$min_words" "${wordlist_path:-}" <<'PY'
-import csv, os, re, sqlite3, subprocess, sys
+PYTHONPATH="$ROOT_DIR" python3 - "$db" "$out_dir" "$min_words" "${wordlist_path:-}" <<'PY'
+import csv, os, sqlite3, subprocess, sys
 from datetime import datetime, timezone
-from pathlib import Path
+
+from lib.seed_scan import best_match, load_wordlist
 
 db_path, out_dir, min_words_str, wordlist_arg = sys.argv[1:5]
 min_words = int(min_words_str)
@@ -65,35 +66,11 @@ min_words = int(min_words_str)
 conn = sqlite3.connect(db_path)
 now  = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-# ── Load BIP39 wordlist ──────────────────────────────────────────────────────
-BIP39_PATHS = [
-    wordlist_arg,
-    "/usr/local/share/bip39-english.txt",
-    "/root/hdd-recovery/config/bip39-english.txt",
-]
-bip39: set[str] = set()
-for p in BIP39_PATHS:
-    if p and os.path.isfile(p):
-        words = {l.strip().lower() for l in open(p) if l.strip()}
-        if len(words) >= 2000:
-            bip39 = words
-            print(f"BIP39 wordlist loaded: {p}  ({len(bip39)} words)")
-            break
-
+bip39 = load_wordlist(wordlist_arg or None)
 if not bip39:
     print("WARNING: BIP39 wordlist not found — seed detection disabled")
-
-def best_bip39_run(text):
-    tokens = re.sub(r"[^a-z\s]", " ", text.lower()).split()
-    best, cur = [], []
-    for t in tokens:
-        if t in bip39:
-            cur.append(t)
-            if len(cur) > len(best):
-                best = list(cur)
-        else:
-            cur = []
-    return len(best), best
+else:
+    print(f"BIP39 wordlist loaded: {len(bip39)} words")
 
 def pdftotext(path):
     try:
@@ -132,10 +109,11 @@ with open(hits_path, 'w', newline='') as f:
             continue
 
         if bip39:
-            run_len, run_words = best_bip39_run(text)
-            if run_len >= min_words:
+            match = best_match(text, min_words=min_words, wordlist=bip39)
+            if match:
+                run_len = match.run_len
                 score = min(100, run_len * 4)
-                seq   = ' '.join(run_words)
+                seq   = match.sequence
                 hits.append((score, run_len, art_id, full_path, seq))
                 writer.writerow([score, run_len, art_id, full_path, seq])
                 print(f"  HIT score={score} run={run_len}: {full_path}")

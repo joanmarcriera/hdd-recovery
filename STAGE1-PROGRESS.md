@@ -47,7 +47,7 @@ Status: complete
 Notes: Local verification used a synthetic encrypted wallet_keys row to confirm dry-run output and no-GPU hard refusal. Full cracking, pause, and resume need a weak encrypted wallet fixture plus GPU/container execution.
 
 ## T4 — btcrecover wrapper
-Commit: pending
+Commit: 4b36065
 Status: complete
 
 - [pass] `bin/image-btcrecover.sh --help` prints usage and links to btcrecover docs
@@ -55,3 +55,12 @@ Status: complete
 - [pending-owner-verification] TUI stage is `is_optional=True, is_manual=True` — operator must explicitly invoke — see tests/smoke/T4-btcrecover.sh
 
 Notes: Local wrapper verification used a fake `echo found:` command to confirm `crack_tasks` and `wallet_keys` imports. Real btcrecover execution is pending container verification.
+
+## T5 — Shared BIP-39 seed scanner + text-seed-scan
+Commit: pending
+Status: complete
+
+- [pending-owner-verification] After refactor, `bin/image-ocr-seed-scan.py` and `bin/image-pdf-extract.sh` continue to produce identical findings (same row count, same scores) on a fixed test corpus. Run them before refactor, snapshot the DB, run after refactor, diff. — see tests/smoke/T5-refactor-regression.sh
+- [pass] Smoke test creates a minimal DB and recovered text file, runs `image-text-seed-scan.sh`, and produces one `findings` row with `category='seed_phrase'` and score 95 — see tests/smoke/T5-text-seed-scan.sh
+
+Notes: Local checks passed for `lib.seed_scan`, OCR Python compile, PDF/text shell syntax, and the text scanner smoke test. The OCR/PDF regression needs owner fixtures plus `pdftotext` and `tesseract`.

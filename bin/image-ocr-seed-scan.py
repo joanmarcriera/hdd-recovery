@@ -19,31 +19,18 @@ are appended to the notes table.
 
 import argparse
 import os
-import re
 import sqlite3
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-BIP39_SEARCH_PATHS = [
-    "/usr/local/share/bip39-english.txt",
-    os.path.join(os.path.dirname(__file__), "../config/bip39-english.txt"),
-]
+ROOT_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT_DIR))
+
+from lib.seed_scan import best_match, load_wordlist, tokenize_text  # noqa: E402
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-def load_bip39(wordlist_path: str | None) -> set[str]:
-    candidates = ([wordlist_path] if wordlist_path else []) + BIP39_SEARCH_PATHS
-    for path in candidates:
-        if path and os.path.isfile(path):
-            with open(path) as f:
-                words = {line.strip().lower() for line in f if line.strip()}
-            if len(words) >= 2000:
-                return words
-            print(f"[warn] {path} has only {len(words)} words, skipping", file=sys.stderr)
-    sys.exit("BIP39 wordlist not found. Run inside the Docker container or pass --wordlist.")
-
 
 def ocr_image(image_path: str) -> str:
     """Return plain-text OCR output from tesseract. Empty string on failure."""
@@ -59,17 +46,10 @@ def ocr_image(image_path: str) -> str:
 
 def best_bip39_run(text: str, bip39: set[str]) -> tuple[int, list[str]]:
     """Return (max_consecutive_bip39_words, word_list_for_best_run)."""
-    tokens = re.sub(r"[^a-z\s]", " ", text.lower()).split()
-    best_run: list[str] = []
-    current_run: list[str] = []
-    for token in tokens:
-        if token in bip39:
-            current_run.append(token)
-            if len(current_run) > len(best_run):
-                best_run = list(current_run)
-        else:
-            current_run = []
-    return len(best_run), best_run
+    match = best_match(text, min_words=1, wordlist=bip39)
+    if not match:
+        return 0, []
+    return match.run_len, match.words
 
 
 def utc_now() -> str:
@@ -154,7 +134,9 @@ def main() -> None:
     if not os.path.isfile(args.db):
         sys.exit(f"database not found: {args.db}")
 
-    bip39 = load_bip39(args.wordlist)
+    bip39 = load_wordlist(args.wordlist)
+    if not bip39:
+        sys.exit("BIP39 wordlist not found. Run inside the Docker container or pass --wordlist.")
     conn = sqlite3.connect(args.db)
 
     export_root = conn.execute(
@@ -204,7 +186,7 @@ def main() -> None:
             entry = {
                 "score": score,
                 "max_run": run_len,
-                "words_found": len([w for w in text.lower().split() if w in bip39]),
+                "words_found": len([t.value for t in tokenize_text(text) if t.value in bip39]),
                 "image_path": img_path,
                 "best_sequence": " ".join(run_words),
             }
