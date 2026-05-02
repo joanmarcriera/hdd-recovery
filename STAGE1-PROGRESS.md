@@ -132,7 +132,7 @@ Status: complete
 Notes: Local checks covered shell syntax, help output, and dry-run. Real plaso execution requires container tools and a recovered corpus/plaso fixture.
 
 ## T12 — TUI stage entries
-Commit: pending
+Commit: 5ea7185
 Status: complete
 
 - [pass] `python3 -c "from tui.stages import STAGES; print(len(STAGES))"` returns 38 + count-of-new-stages
@@ -141,3 +141,18 @@ Status: complete
 - [pass] `requires_prior` keys all match an existing stage `key`
 
 Notes: The working tree already contained an uncommitted `tag-photos` stage 39 before T12, so local `len(STAGES)` is 48: that pre-existing stage plus the nine Stage 1 TUI entries. New Stage 1 entries are numbered 40-48 to avoid overwriting owner work.
+
+## T13 — README and TODO refresh
+Commit: 4c90fdc
+Status: complete
+
+- [pass] `grep -E "image-(wallet-inspect|crack-wallet|btcrecover|text-seed-scan|enrich-trid|extract-winmem|volatility-scan|dedup-photos|crack-keepass)" README.md CLAUDE.md` finds matches in both files
+- [pass] `TODO.md` no longer lists "john + hashcat + bitcoin2john", "btcrecover", "Plain-text BIP39 scanner", "Photo deduplication", "Import plaso events", "psort filter preset" as remaining
+- [pass] The "Cracking GPU setup" callout is present in `README.md`
+- [pass] No diffs to any file outside the four listed above
+
+Notes: The T13 commit staged only `README.md`, `docker/README.md`, `TODO.md`, and `CLAUDE.md`. This progress update is maintained separately as the audit trail.
+
+## Spec issue — Final commit count
+
+Discovered during final verification on 2026-05-02: `STAGE1-WORK.md` requires one commit per ticket and lists T0, T1, T2, T3, T4, T5, T6, T7a, T7b, T8, T9, T10, T11, T12, T13. That is 15 tickets/commits, but the final checklist says to confirm 14 commits (`T0–T13`) on top of `d1dc700`. I kept one commit per listed ticket and did not squash or amend history.

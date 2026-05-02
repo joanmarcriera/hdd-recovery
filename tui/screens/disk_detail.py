@@ -310,6 +310,11 @@ class DiskDetailScreen(Screen):
             self.app.push_screen(WizardScreen())
             return
 
+        # Stages with a dedicated config modal (e.g. LLM photo tagging)
+        if stage.has_config_screen:
+            self._config_and_run(stage)
+            return
+
         if stage.is_manual:
             self.app.notify(
                 f"Manual step: {stage.name}\n\nSee detail panel for instructions.",
@@ -335,6 +340,25 @@ class DiskDetailScreen(Screen):
         if confirmed:
             from screens.log_viewer import LogViewerScreen
             self.app.push_screen(LogViewerScreen(self.disk, stage))
+
+    @work
+    async def _config_and_run(self, stage: StageDef) -> None:
+        from executor import has_any_live_process
+        # Check all stages including this one — blocks re-entry if already running.
+        blocker = has_any_live_process(self.disk)
+        if blocker:
+            self.app.notify(
+                f"Cannot start: {blocker} is currently running. "
+                "Wait for it to finish, or use T to re-attach to its log.",
+                severity="warning",
+                timeout=8,
+            )
+            return
+        from screens.tag_photos import TagPhotosScreen
+        cmd = await self.app.push_screen_wait(TagPhotosScreen(self.disk, stage))
+        if cmd:
+            from screens.log_viewer import LogViewerScreen
+            self.app.push_screen(LogViewerScreen(self.disk, stage, cmd_override=cmd))
 
     def action_view_log(self) -> None:
         stage = self._selected_stage()

@@ -14,7 +14,7 @@ from textual.binding import Binding
 from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, RichLog
 
-from executor import build_command, launch
+from executor import build_command, launch, launch_cmd
 from stages import StageDef
 from state import DiskInfo
 
@@ -54,11 +54,13 @@ class LogViewerScreen(Screen):
         disk: DiskInfo,
         stage: StageDef,
         log_path: Optional[str] = None,
+        cmd_override: Optional[list[str]] = None,
     ) -> None:
         super().__init__()
         self.disk = disk
         self.stage = stage
-        self.log_path = log_path     # if set, read-only tail mode
+        self.log_path = log_path          # if set, read-only tail mode
+        self.cmd_override = cmd_override  # if set, run this instead of build_command()
         self._process: Optional[asyncio.subprocess.Process] = None
         self._done = False
         self._start_time = time.monotonic()
@@ -96,14 +98,21 @@ class LogViewerScreen(Screen):
 
     @work
     async def _run_stage(self, log: RichLog) -> None:
-        from executor import build_command
-        cmd = build_command(self.disk, self.stage)
-        log.write(f"[dim]$ {escape(' '.join(cmd))}[/dim]\n")
+        import shlex
+        if self.cmd_override:
+            cmd = self.cmd_override
+        else:
+            from executor import build_command
+            cmd = build_command(self.disk, self.stage)
+        log.write(f"[dim]$ {escape(shlex.join(cmd))}[/dim]\n")
 
         status_label = self.query_one("#status-bar", Label)
 
         try:
-            self._process = await launch(self.disk, self.stage)
+            if self.cmd_override:
+                self._process = await launch_cmd(self.cmd_override)
+            else:
+                self._process = await launch(self.disk, self.stage)
         except Exception as exc:
             log.write(f"[bold red]Failed to start process: {escape(str(exc))}[/bold red]")
             status_label.update("[red]Failed to start — B to go back[/red]")

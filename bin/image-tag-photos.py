@@ -54,6 +54,10 @@ def now_iso():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def log(msg):
+    print(f"[{now_iso()}] {msg}", flush=True)
+
+
 def open_db(path):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
@@ -164,6 +168,10 @@ def main():
                     help="Prompt sent to the model for every image")
     ap.add_argument("--dry-run", action="store_true",
                     help="Print candidates without calling Ollama")
+    ap.add_argument("--max-attempts", type=int, default=3,
+                    help="Total attempts per image (1 initial + N-1 retry rounds, default 3)")
+    ap.add_argument("--retry-backoff", type=float, default=5.0,
+                    help="Seconds to sleep between retry rounds (default 5)")
     args = ap.parse_args()
 
     if not os.path.isfile(args.db):
@@ -172,12 +180,12 @@ def main():
     ollama_url = args.ollama or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
     min_size = args.min_size if args.min_size is not None else (20480 if args.scope == "real" else 10240)
 
-    print(f"DB:       {args.db}")
-    print(f"Scope:    {args.scope}  |  min-size: {min_size:,} B  |  model: {args.model}")
-    print(f"Ollama:   {ollama_url}")
+    log(f"DB:       {args.db}")
+    log(f"Scope:    {args.scope}  |  min-size: {min_size:,} B  |  model: {args.model}")
+    log(f"Ollama:   {ollama_url}")
+    log(f"Max attempts per image: {args.max_attempts}  |  retry backoff: {args.retry_backoff:.1f}s")
     if args.dry_run:
-        print("DRY RUN — no Ollama calls will be made")
-    print()
+        log("DRY RUN — no Ollama calls will be made")
 
     if not args.dry_run:
         try:
@@ -201,78 +209,119 @@ def main():
     ).fetchall()
 
     total = len(candidates)
-    print(f"Candidates: {total:,}")
+    log(f"Candidates: {total:,}")
     if total == 0:
-        print("Nothing to tag.")
+        log("Nothing to tag.")
         conn.close()
         return
 
     if args.dry_run:
         for row in candidates[:20]:
-            print(f"  {row['method']:12s}  {(row['size_bytes'] or 0)/1024:7.0f} KB  {row['full_path']}")
+            log(f"  {row['method']:12s}  {(row['size_bytes'] or 0)/1024:7.0f} KB  {row['full_path']}")
         if total > 20:
-            print(f"  … and {total - 20} more")
+            log(f"  … and {total - 20} more")
         conn.close()
         return
 
     run_id = record_start(conn, args.scope, min_size, args.limit, args.model, ollama_url)
 
-    tagged = skipped = errors = 0
+    tagged = skipped = 0
+    pending = []   # rows that errored on this attempt — retried at end of pass
+    missing = 0
     t_start = time.time()
 
+    def attempt(row, label):
+        """Try to tag one image. Returns True on success, False on transient error.
+        On success, increments `tagged` via outer scope. On failure, returns False
+        so the caller can append to `pending`."""
+        nonlocal tagged
+        artifact_id = row["id"]
+        full_path   = row["full_path"]
+        size_bytes  = row["size_bytes"] or 0
+
+        if not os.path.isfile(full_path):
+            log(f"{label} MISSING: {full_path}")
+            return None  # permanent — don't retry
+
+        log(f"{label} {Path(full_path).name} ({size_bytes/1024:.0f} KB) …")
+        try:
+            t1 = time.time()
+            desc = call_llava(ollama_url, args.model, full_path, args.prompt)
+            took = time.time() - t1
+            store_description(conn, artifact_id, full_path, desc)
+            tagged += 1
+            log(f"{label} OK in {took:.1f}s — {desc[:120]}")
+            return True
+        except Exception as e:
+            log(f"{label} ERROR: {e}")
+            return False
+
     try:
+        # ---- Pass 1: walk all candidates ----
         for i, row in enumerate(candidates):
             if args.limit is not None and tagged >= args.limit:
                 break
 
-            artifact_id = row["id"]
-            full_path   = row["full_path"]
-            size_bytes  = row["size_bytes"] or 0
-
-            if not args.force and is_tagged(conn, artifact_id):
+            if not args.force and is_tagged(conn, row["id"]):
                 skipped += 1
-                continue
-
-            if not os.path.isfile(full_path):
-                errors += 1
-                print(f"[{i+1}/{total}] MISSING: {full_path}")
                 continue
 
             elapsed = time.time() - t_start
             rate = tagged / elapsed if elapsed > 0 and tagged > 0 else 0
             remaining_count = total - i - skipped
             eta = fmt_eta(remaining_count / rate) if rate > 0 else "?"
+            label = f"[{i+1}/{total}] eta {eta}"
 
-            print(
-                f"[{i+1}/{total}] {Path(full_path).name} "
-                f"({size_bytes/1024:.0f} KB)  eta {eta} …",
-                end="", flush=True,
-            )
+            result = attempt(row, label)
+            if result is None:
+                missing += 1
+            elif result is False:
+                pending.append(row)
 
-            try:
-                t1 = time.time()
-                desc = call_llava(ollama_url, args.model, full_path, args.prompt)
-                took = time.time() - t1
-                store_description(conn, artifact_id, full_path, desc)
-                tagged += 1
-                print(f" {took:.1f}s")
-                print(f"    {desc[:120]}")
-            except Exception as e:
-                errors += 1
-                print(f" ERROR: {e}")
+        # ---- Retry passes for transient failures ----
+        round_idx = 1
+        while pending and round_idx < args.max_attempts:
+            if args.retry_backoff > 0:
+                log(f"Retry round {round_idx}/{args.max_attempts - 1}: "
+                    f"sleeping {args.retry_backoff:.1f}s before retrying "
+                    f"{len(pending)} image(s)")
+                time.sleep(args.retry_backoff)
+            log(f"Retry round {round_idx}/{args.max_attempts - 1}: "
+                f"{len(pending)} image(s) to retry")
+            still_pending = []
+            for j, row in enumerate(pending):
+                label = f"[retry {round_idx} {j+1}/{len(pending)}]"
+                result = attempt(row, label)
+                if result is False:
+                    still_pending.append(row)
+                # result True or None: drop from the queue
+            pending = still_pending
+            round_idx += 1
 
     except KeyboardInterrupt:
-        print(f"\nInterrupted — {tagged} tagged so far. Re-run to resume.")
+        log(f"Interrupted — {tagged} tagged so far. Re-run to resume.")
 
+    errors = len(pending) + missing
     status = "ok" if errors == 0 else ("partial" if tagged > 0 else "failed")
-    notes = f"tagged={tagged} skipped={skipped} errors={errors}"
+    notes = (f"tagged={tagged} skipped={skipped} errors={errors} "
+             f"(retry_failures={len(pending)} missing={missing})")
     record_end(conn, run_id, status, notes)
+
+    if pending:
+        log(f"Images still failing after {args.max_attempts} attempts "
+            f"(will be retried on next run since no findings row was written):")
+        for row in pending[:20]:
+            log(f"  - {row['full_path']}")
+        if len(pending) > 20:
+            log(f"  … and {len(pending) - 20} more")
+
     conn.close()
 
     elapsed = time.time() - t_start
-    print(f"\nDone: {tagged} tagged, {skipped} already done, {errors} errors — {elapsed:.0f}s total")
+    log(f"Done: {tagged} tagged, {skipped} already done, {errors} errors "
+        f"({len(pending)} retry-exhausted, {missing} missing) — {elapsed:.0f}s total")
     if tagged > 0:
-        print(f"Average: {elapsed/tagged:.1f}s per image")
+        log(f"Average: {elapsed/tagged:.1f}s per image")
 
 
 if __name__ == "__main__":

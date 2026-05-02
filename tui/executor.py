@@ -71,6 +71,15 @@ async def launch(
     return process
 
 
+async def launch_cmd(cmd: list[str]) -> asyncio.subprocess.Process:
+    """Launch an arbitrary argv list (used when a config screen overrides stage args)."""
+    return await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+
+
 def has_concurrent_db_writer(disk: DiskInfo, exclude_stage_key: str = "") -> Optional[str]:
     """Return the name of a currently-running DB-writing stage, or None."""
     from stages import STAGES

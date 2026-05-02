@@ -379,18 +379,18 @@ def page_artifacts(db_path, method="", limit=1000):
     enc = urllib.parse.quote(db_path)
     try:
         method_filter = f"WHERE method = '{method}'" if method else ""
-        cols, rows = run_query(db_path,
-            f"""SELECT method, mime_type, size_bytes, relative_path, sha256, created_at
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"""SELECT method, mime_type, size_bytes, relative_path, full_path,
+                       sha256, created_at
                 FROM recovered_artifacts {method_filter}
-                ORDER BY created_at DESC LIMIT {limit}""")
-        # method selector
-        try:
-            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-            methods = [r[0] for r in conn.execute(
-                "SELECT DISTINCT method FROM recovered_artifacts ORDER BY method").fetchall()]
-            conn.close()
-        except Exception:
-            methods = []
+                ORDER BY created_at DESC LIMIT {limit}"""
+        ).fetchall()
+        methods = [r[0] for r in conn.execute(
+            "SELECT DISTINCT method FROM recovered_artifacts ORDER BY method").fetchall()]
+        conn.close()
+
         opts = '<option value="">All</option>' + "".join(
             f'<option value="{h(m)}" {"selected" if m==method else ""}>{h(m)}</option>'
             for m in methods)
@@ -401,7 +401,44 @@ def page_artifacts(db_path, method="", limit=1000):
             <button type="submit">Filter</button>
           </form>
         </div>"""
-        body = form + f'<div class="panel">{table_html(cols, rows)}</div>'
+
+        tbl = ('<p class="count">' + f"{len(rows):,}" + ' row(s)</p>'
+               '<div style="overflow-x:auto"><table>'
+               '<tr><th>Method</th><th>MIME</th><th>Size (B)</th><th>Path</th>'
+               '<th>SHA256</th><th>Created</th><th>View</th></tr>')
+        for r in rows:
+            fp = r["full_path"] or ""
+            mime = r["mime_type"] or ""
+            sha = r["sha256"] or ""
+            sha_short = (sha[:12] + "…") if len(sha) > 12 else sha
+            view = ""
+            if fp:
+                fenc = urllib.parse.quote(fp)
+                if mime.startswith("image/"):
+                    icon = "&#128247;"   # 📷
+                    title = "Open image in new tab"
+                elif mime.startswith("text/") or mime in ("application/pdf",
+                                                          "application/json",
+                                                          "application/xml"):
+                    icon = "&#128196;"   # 📄
+                    title = "Open file in new tab"
+                else:
+                    icon = "&#128190;"   # 💾
+                    title = "Download / open raw bytes"
+                view = (f'<a href="/file?path={fenc}" target="_blank" '
+                        f'title="{title}">{icon}</a>')
+            tbl += (
+                f'<tr><td>{h(r["method"])}</td>'
+                f'<td>{h(mime)}</td>'
+                f'<td style="text-align:right">{(r["size_bytes"] or 0):,}</td>'
+                f'<td style="word-break:break-all">{h(r["relative_path"] or "")}</td>'
+                f'<td style="font-family:monospace;font-size:11px" title="{h(sha)}">{h(sha_short)}</td>'
+                f'<td style="white-space:nowrap">{h(r["created_at"] or "")}</td>'
+                f'<td style="text-align:center">{view}</td></tr>'
+            )
+        tbl += '</table></div>'
+
+        body = form + f'<div class="panel">{tbl}</div>'
     except Exception as e:
         body = f'<div class="panel err">{h(str(e))}</div>'
     return page("Recovered Artifacts", body, db_name=db_path,
