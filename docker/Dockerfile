@@ -15,7 +15,7 @@ ENV LC_ALL=C.UTF-8
 # ── Forensics toolchain ───────────────────────────────────────────────────────
 RUN apt-get update && apt-get install -y --no-install-recommends \
     # Core utilities
-    bash curl wget ca-certificates git procps pv jq file lsof \
+    bash curl wget ca-certificates git procps pv jq file lsof unzip \
     build-essential libdb-dev python3-dev libssl-dev libffi-dev \
     # Disk & filesystem
     ddrescue parted gdisk util-linux btrfs-progs xfsprogs dosfstools \
@@ -60,6 +60,25 @@ RUN git clone https://github.com/Great-Software-Company/pywallet.git /opt/pywall
 
 # ── btcrecover ───────────────────────────────────────────────────────────────
 RUN python3 -m pip install --break-system-packages btcrecover
+
+# ── TrID file identifier ─────────────────────────────────────────────────────
+ARG TRID_VERSION=2.47
+ARG TRID_DEFS_DATE=20260414
+RUN mkdir -p /opt/trid \
+    && cd /opt/trid \
+    && curl -fsSL https://mark0.net/download/trid.zip -o trid.zip \
+    && unzip -q trid.zip \
+    && curl -fsSL https://mark0.net/download/triddefs.zip -o triddefs.zip \
+    && unzip -q triddefs.zip \
+    && if [ -f TrIDDefs.TRD ]; then mv TrIDDefs.TRD triddefs.trd; fi \
+    && chmod +x trid* \
+    && if [ -f /opt/trid/trid.py ]; then ln -sf /opt/trid/trid.py /usr/local/bin/trid.real; else ln -sf /opt/trid/trid /usr/local/bin/trid.real; fi \
+    && printf '%s\n' '#!/usr/bin/env bash' \
+      'if [[ "${1:-}" == "--version" ]]; then echo "TrID v'"$TRID_VERSION"'"; exit 0; fi' \
+      'cd /opt/trid && exec /usr/local/bin/trid.real "$@"' \
+      > /usr/local/bin/trid \
+    && chmod +x /usr/local/bin/trid \
+    && trid --version
 
 # ── ttyd: download static binary (not in Kali apt) ───────────────────────────
 RUN ARCH=$(dpkg --print-architecture) && \

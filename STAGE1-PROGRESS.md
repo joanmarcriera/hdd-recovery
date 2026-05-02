@@ -57,10 +57,21 @@ Status: complete
 Notes: Local wrapper verification used a fake `echo found:` command to confirm `crack_tasks` and `wallet_keys` imports. Real btcrecover execution is pending container verification.
 
 ## T5 — Shared BIP-39 seed scanner + text-seed-scan
-Commit: pending
+Commit: 15585f0
 Status: complete
 
 - [pending-owner-verification] After refactor, `bin/image-ocr-seed-scan.py` and `bin/image-pdf-extract.sh` continue to produce identical findings (same row count, same scores) on a fixed test corpus. Run them before refactor, snapshot the DB, run after refactor, diff. — see tests/smoke/T5-refactor-regression.sh
 - [pass] Smoke test creates a minimal DB and recovered text file, runs `image-text-seed-scan.sh`, and produces one `findings` row with `category='seed_phrase'` and score 95 — see tests/smoke/T5-text-seed-scan.sh
 
 Notes: Local checks passed for `lib.seed_scan`, OCR Python compile, PDF/text shell syntax, and the text scanner smoke test. The OCR/PDF regression needs owner fixtures plus `pdftotext` and `tesseract`.
+
+## T6 — TrID enrichment
+Commit: pending
+Status: complete
+
+- [pending-owner-verification] `trid --version` works inside container — see tests/smoke/T6-trid.sh
+- [pending-owner-verification] Running on a DB with carved files updates the new columns — see tests/smoke/T6-trid.sh
+- [pending-owner-verification] Re-running without `--force` skips already-enriched rows (`WHERE trid_top_ext IS NULL`) — see tests/smoke/T6-trid.sh
+- [pending-owner-verification] Original file paths in `recovered_artifacts.full_path` are unchanged after the script runs (assert this in the smoke test) — see tests/smoke/T6-trid.sh
+
+Notes: Local checks covered shell syntax and dry-run. TrID itself is installed from mark0.net during Docker build, which is pending owner verification in the container environment. The script intentionally never invokes TrID `--ae`.
