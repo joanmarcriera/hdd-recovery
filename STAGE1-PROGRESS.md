@@ -103,7 +103,7 @@ Status: complete
 Notes: Local checks covered shell syntax, help output, and dry-run. Full execution needs the container imagehash/Pillow install.
 
 ## T9 — Image quality scoring
-Commit: pending
+Commit: eed609d
 Status: complete
 
 - [pass] Running enrich-photos populates `quality_score` for all image artifacts
@@ -111,3 +111,13 @@ Status: complete
 - [pending-owner-verification] Real photos score high — see tests/smoke/T9-enrich-photos-quality.sh
 
 Notes: Local smoke used a blank JPEG, a 4x4 thumbnail, and a synthetic high-entropy image; it verified quality_score population and ordering. Owner can set `REAL_PHOTO` in the smoke test to verify an actual photo fixture.
+
+## T10 — KeePass cracking
+Commit: pending
+Status: complete
+
+- [pending-owner-verification] KDBX 3 file with weak password cracks via hashcat path — see tests/smoke/T10-crack-keepass.sh
+- [pass] KDBX 4 file is detected and routed to keepass4brute (or skipped with a clear message if `--allow-cpu-cracking` not passed)
+- [pending-owner-verification] `crack_tasks.hash_mode` is `'13400'` for hashcat path, `'argon2-keepass4brute'` for keepass4brute path — see tests/smoke/T10-crack-keepass.sh
+
+Notes: Local dry-run used a synthetic KDBX4 header to confirm routing and clear CPU opt-in messaging. Hashcat and keepass4brute execution need fixtures and container/GPU verification. keepass4brute is pinned to `6e0b1a0e11daaa674653c5f15f8d06ba2164c335`.

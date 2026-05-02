@@ -22,7 +22,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Forensics
     sleuthkit testdisk bulk-extractor foremost scalpel \
     extundelete ext4magic recoverjpeg magicrescue binwalk dc3dd \
-    john john-data hashcat hashcat-data \
+    john john-data hashcat hashcat-data keepassxc \
     # Metadata & databases
     libimage-exiftool-perl db5.3-util sqlite3 \
     # Python runtime (for inline scripts in existing bash tools)
@@ -66,6 +66,14 @@ RUN python3 -m pip install --break-system-packages volatility3
 
 # ── Photo perceptual hashing ─────────────────────────────────────────────────
 RUN python3 -m pip install --break-system-packages imagehash
+
+# ── keepass4brute for KDBX 4 / Argon2 CPU-only fallback ─────────────────────
+ARG KEEPASS4BRUTE_COMMIT=6e0b1a0e11daaa674653c5f15f8d06ba2164c335
+RUN git clone https://github.com/r3nt0n/keepass4brute.git /opt/keepass4brute \
+    && cd /opt/keepass4brute \
+    && git checkout "$KEEPASS4BRUTE_COMMIT" \
+    && chmod +x keepass4brute.sh \
+    && ln -sf /opt/keepass4brute/keepass4brute.sh /usr/local/bin/keepass4brute.sh
 
 # ── TrID file identifier ─────────────────────────────────────────────────────
 ARG TRID_VERSION=2.47
