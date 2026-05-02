@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Core utilities
     bash curl wget ca-certificates git procps pv jq file lsof unzip \
     build-essential libdb-dev python3-dev libssl-dev libffi-dev \
+    autoconf automake libtool pkg-config \
     # Disk & filesystem
     ddrescue parted gdisk util-linux btrfs-progs xfsprogs dosfstools \
     # Forensics
@@ -58,8 +59,17 @@ RUN git clone https://github.com/Great-Software-Company/pywallet.git /opt/pywall
     && ln -sf /opt/pywallet/run_pywallet.sh /usr/local/bin/pywallet \
     && python3 -c 'import pywallet'
 
-# ── btcrecover ───────────────────────────────────────────────────────────────
-RUN python3 -m pip install --break-system-packages btcrecover
+# ── btcrecover (3rdIteration fork — not on PyPI, ships as scripts) ───────────
+ARG BTCRECOVER_REF=7101ca41b8ca526f1b9bca905587701ad4767bea  # tag 1.12.0
+RUN git clone https://github.com/3rdIteration/btcrecover.git /opt/btcrecover \
+    && cd /opt/btcrecover \
+    && git checkout "$BTCRECOVER_REF" \
+    && python3 -m pip install --break-system-packages -r requirements.txt \
+    && chmod +x btcrecover.py seedrecover.py \
+    && ln -sf /opt/btcrecover/btcrecover.py  /usr/local/bin/btcrecover.py \
+    && ln -sf /opt/btcrecover/seedrecover.py /usr/local/bin/seedrecover.py \
+    && python3 /opt/btcrecover/btcrecover.py --help >/dev/null \
+    && python3 /opt/btcrecover/seedrecover.py --help >/dev/null
 
 # ── Volatility3 ──────────────────────────────────────────────────────────────
 RUN python3 -m pip install --break-system-packages volatility3
