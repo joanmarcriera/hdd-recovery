@@ -130,6 +130,37 @@ Every bin script sources this. Key functions:
 | `bin/image-export.sh <db> --file-id <id>` | Copy a specific file to `exports/` |
 | `bin/image-attach-ro.sh` / `bin/image-detach.sh` | Mount/unmount image read-only via loop device |
 
+### Web UI (`bin/image-serve.py`)
+
+Started via the TUI or `python3 bin/image-serve.py --port 7788`. Routes:
+
+| Route | Purpose |
+|-------|---------|
+| `/` | Home: all databases with file/artifact/wallet counts and a map icon link |
+| `/db?db=<path>` | Database detail: image info, stage history, quick links |
+| `/mapview?db=<path>` | ddrescue map visualiser — reads `ddrescue_map_path` from `image_info` |
+| `/mapview?map=<path>` | ddrescue map visualiser — direct mapfile path, no DB required |
+| `/wallets`, `/pictures`, `/artifacts`, `/bulk_hits`, `/findings` | Tabular result views |
+| `/timeline?db=<path>` | Event timeline from `image-timeline.sh` |
+| `/search?db=<path>` | Filename search across `files` table |
+| `/sql?db=<path>` | Read-only SQL console (SELECT/WITH only) |
+
+#### ddrescue map visualiser (`/mapview`)
+
+Parses GNU ddrescue mapfile format and renders an SVG block grid (~5000 cells) colour-coded by status:
+
+| Colour | Status char | Meaning |
+|--------|-------------|---------|
+| Green `#22aa44` | `+` | rescued — successfully read |
+| Dark blue `#334466` | `-` | non-tried — not yet attempted |
+| Yellow `#cc9900` | `/` | non-trimmed — read errors, not yet trimmed |
+| Orange `#dd6600` | `*` | non-scraped — trimmed but not scraped |
+| Red `#cc2222` | `?` | bad-sector — unrecoverable |
+
+Each display cell covers `total_size / 5000` bytes. When multiple ddrescue blocks fall in the same cell, the worst status wins (bad-sector > non-scraped > non-trimmed > non-tried > rescued). The page also shows byte-level coverage statistics with inline progress bars.
+
+The link appears automatically on the home page (📄 icon) and the DB detail page whenever `ddrescue_map_path` in `image_info` points to an existing file.
+
 ### Monitoring
 
 ```bash

@@ -2,6 +2,7 @@
 //
 // Responsibilities:
 //   - Start ttyd with password auth and restart it on crash
+//   - Start image-serve.py (read-only web UI) and restart it on crash
 //   - Serve GET /health and GET /status for TrueNAS health probes
 //   - Test Ollama connectivity at startup and report it in /status
 //   - Emit a startup banner with access info
@@ -27,17 +28,24 @@ const (
 	defaultTtydPort   = "7681"
 	defaultHealthPort = "8080"
 	defaultTtydUser   = "admin"
+	defaultWebPort    = "7788"
+	defaultWebHost    = "0.0.0.0"
+	defaultWebRoot    = "/mnt/recovery16tb/recovery"
+	webPIDFile        = "/tmp/hdd-recovery-webui.pid"
 	maxRestarts       = 20
 	restartBackoff    = 5 * time.Second
 	ollamaTimeout     = 5 * time.Second
 )
 
-// State shared between the ttyd goroutine and the HTTP handlers.
+// State shared between goroutines and the HTTP handlers.
 type state struct {
 	mu          sync.RWMutex
 	ttydUp      bool
 	ttydPID     int
-	restarts    int
+	ttydRestarts int
+	webUp       bool
+	webPID      int
+	webRestarts int
 	startedAt   time.Time
 	ollamaHost  string
 	ollamaOK    bool
@@ -54,27 +62,27 @@ func main() {
 		log.Fatal("TTYD_PASSWORD environment variable is required")
 	}
 
-	ttydPort  := envOr("TTYD_PORT", defaultTtydPort)
-	ttydUser  := envOr("TTYD_USER", defaultTtydUser)
+	ttydPort  := envOr("TTYD_PORT",  defaultTtydPort)
+	ttydUser  := envOr("TTYD_USER",  defaultTtydUser)
 	healthPort := envOr("HEALTH_PORT", defaultHealthPort)
+	webPort   := envOr("WEB_PORT",   defaultWebPort)
+	webHost   := envOr("WEB_HOST",   defaultWebHost)
+	webRoot   := envOr("WEB_ROOT",   defaultWebRoot)
 	g.ollamaHost = envOr("OLLAMA_HOST", "")
 	ttydCmd   := envOr("TTYD_CMD", "/bin/bash -c 'cd /root/hdd-recovery && exec bin/tui.sh'")
 
-	// Probe Ollama before starting the main loop so the result is available
-	// immediately via /status.
 	if g.ollamaHost != "" {
 		probeOllama()
 	}
 
-	printBanner(ttydPort, healthPort)
+	printBanner(ttydPort, webPort, healthPort)
 
-	// ttyd supervisor loop runs in a goroutine; the main goroutine serves HTTP.
 	go runTtyd(ttydPort, ttydUser, password, ttydCmd)
+	go runWebUI(webHost, webPort, webRoot)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/status", handleStatus)
-	// Root redirect so TrueNAS health probe to "/" also works.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			http.Redirect(w, r, "/health", http.StatusFound)
@@ -88,19 +96,21 @@ func main() {
 		Handler: mux,
 	}
 
-	// Graceful shutdown on SIGTERM / SIGINT.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		s := <-sig
 		log.Printf("Received %s — shutting down", s)
 		g.mu.Lock()
-		if g.ttydPID > 0 {
-			if proc, err := os.FindProcess(g.ttydPID); err == nil {
-				_ = proc.Signal(syscall.SIGTERM)
+		for _, pid := range []int{g.ttydPID, g.webPID} {
+			if pid > 0 {
+				if proc, err := os.FindProcess(pid); err == nil {
+					_ = proc.Signal(syscall.SIGTERM)
+				}
 			}
 		}
 		g.mu.Unlock()
+		_ = os.Remove(webPIDFile)
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(ctx)
@@ -113,11 +123,9 @@ func main() {
 	}
 }
 
-// runTtyd starts ttyd and restarts it on crash with exponential backoff cap.
+// runTtyd starts ttyd and restarts it on crash.
 func runTtyd(port, user, password, cmdStr string) {
 	credential := fmt.Sprintf("%s:%s", user, password)
-	// Split cmdStr into executable + args for exec.Command.
-	// We pass it to bash -c to support shell syntax in TTYD_CMD.
 	args := []string{
 		"--port", port,
 		"--credential", credential,
@@ -142,23 +150,70 @@ func runTtyd(port, user, password, cmdStr string) {
 		g.mu.Unlock()
 
 		log.Printf("[ttyd] started on port %s (pid %d)", port, cmd.Process.Pid)
-
 		_ = cmd.Wait()
 
 		g.mu.Lock()
 		g.ttydUp = false
 		g.ttydPID = 0
-		g.restarts++
-		restarts := g.restarts
+		g.ttydRestarts++
+		restarts := g.ttydRestarts
 		g.mu.Unlock()
 
 		log.Printf("[ttyd] exited (restart #%d)", restarts)
-
 		if restarts >= maxRestarts {
 			log.Printf("[ttyd] crashed %d times — giving up", restarts)
 			return
 		}
+		time.Sleep(restartBackoff)
+	}
+}
 
+// runWebUI starts image-serve.py and restarts it on crash.
+// It writes the PID to webPIDFile so the TUI Web Server screen can detect it.
+func runWebUI(host, port, root string) {
+	for {
+		cmd := exec.Command("python3",
+			"/root/hdd-recovery/bin/image-serve.py",
+			"--host", host,
+			"--port", port,
+			"--root", root,
+		)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		if err := cmd.Start(); err != nil {
+			log.Printf("[webui] failed to start: %v — retrying in %s", err, restartBackoff)
+			time.Sleep(restartBackoff)
+			continue
+		}
+
+		pid := cmd.Process.Pid
+		if err := os.WriteFile(webPIDFile, []byte(fmt.Sprintf("%d\n", pid)), 0644); err != nil {
+			log.Printf("[webui] warning: could not write PID file: %v", err)
+		}
+
+		g.mu.Lock()
+		g.webUp = true
+		g.webPID = pid
+		g.mu.Unlock()
+
+		log.Printf("[webui] started on %s:%s (pid %d)", host, port, pid)
+		_ = cmd.Wait()
+
+		_ = os.Remove(webPIDFile)
+
+		g.mu.Lock()
+		g.webUp = false
+		g.webPID = 0
+		g.webRestarts++
+		restarts := g.webRestarts
+		g.mu.Unlock()
+
+		log.Printf("[webui] exited (restart #%d)", restarts)
+		if restarts >= maxRestarts {
+			log.Printf("[webui] crashed %d times — giving up", restarts)
+			return
+		}
 		time.Sleep(restartBackoff)
 	}
 }
@@ -207,15 +262,18 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 func handleStatus(w http.ResponseWriter, _ *http.Request) {
 	g.mu.RLock()
 	payload := map[string]any{
-		"ok":           g.ttydUp,
-		"ttyd_up":      g.ttydUp,
-		"ttyd_pid":     g.ttydPID,
-		"restarts":     g.restarts,
-		"started_at":   g.startedAt.UTC().Format(time.RFC3339),
-		"uptime_s":     int(time.Since(g.startedAt).Seconds()),
-		"ollama_host":  g.ollamaHost,
-		"ollama_ok":    g.ollamaOK,
-		"ollama_msg":   g.ollamaMsg,
+		"ok":            g.ttydUp,
+		"ttyd_up":       g.ttydUp,
+		"ttyd_pid":      g.ttydPID,
+		"ttyd_restarts": g.ttydRestarts,
+		"webui_up":      g.webUp,
+		"webui_pid":     g.webPID,
+		"webui_restarts": g.webRestarts,
+		"started_at":    g.startedAt.UTC().Format(time.RFC3339),
+		"uptime_s":      int(time.Since(g.startedAt).Seconds()),
+		"ollama_host":   g.ollamaHost,
+		"ollama_ok":     g.ollamaOK,
+		"ollama_msg":    g.ollamaMsg,
 	}
 	g.mu.RUnlock()
 
@@ -234,15 +292,16 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-func printBanner(ttydPort, healthPort string) {
+func printBanner(ttydPort, webPort, healthPort string) {
 	fmt.Printf(`
 ┌─────────────────────────────────────────────────────────────┐
 │              hdd-forensics  •  analysis container           │
 ├─────────────────────────────────────────────────────────────┤
 │  Terminal UI   →  http://<host>:%s                        │
+│  Web query UI  →  http://<host>:%s                        │
 │  Health API    →  http://<host>:%s/health                │
 │  Status API    →  http://<host>:%s/status                │
-`, ttydPort, healthPort, healthPort)
+`, ttydPort, webPort, healthPort, healthPort)
 
 	if g.ollamaHost != "" {
 		status := "✗ unreachable"

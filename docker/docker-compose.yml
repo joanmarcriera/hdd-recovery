@@ -12,6 +12,8 @@ services:
     ports:
       # Browser terminal (ttyd) — open in any browser
       - "${TTYD_PORT:-7681}:7681"
+      # Read-only web query UI (image-serve.py) — start it from the TUI Web Server screen
+      - "${WEB_PORT:-7788}:7788"
       # Supervisor health/status API — used by TrueNAS health probe
       - "${HEALTH_PORT:-8080}:8080"
 

@@ -45,6 +45,16 @@ nav{margin-bottom:16px;font-size:13px}
 .count{color:var(--sub);font-size:12px}
 """
 
+# ddrescue map status characters: (hex_color, display_label)
+_MAP_STATUS = {
+    '+': ('#22aa44', 'rescued'),
+    '-': ('#334466', 'non-tried'),
+    '/': ('#cc9900', 'non-trimmed'),
+    '*': ('#dd6600', 'non-scraped'),
+    '?': ('#cc2222', 'bad-sector'),
+}
+_MAP_PRIORITY = {'+': 4, '-': 3, '/': 2, '*': 1, '?': 0}  # lower = worse
+
 def h(s):
     return html.escape(str(s)) if s is not None else "<span style='color:#555'>NULL</span>"
 
@@ -142,7 +152,11 @@ def page_home(root):
         wallet_hits = query_scalar(db_path, "SELECT COUNT(*) FROM wallet_candidates") or 0
         last_run = query_scalar(db_path,
             "SELECT MAX(COALESCE(ended_at, started_at)) FROM scan_runs") or "—"
-        link = f'/db?db={urllib.parse.quote(db_path)}'
+        map_p = query_scalar(db_path, "SELECT ddrescue_map_path FROM image_info WHERE id=1") or ""
+        enc = urllib.parse.quote(db_path)
+        map_cell = (f'<a href="/mapview?db={enc}">&#128209;</a>'
+                    if map_p and os.path.isfile(map_p) else "—")
+        link = f'/db?db={enc}'
         rows_html += f"""<tr>
           <td><a href="{link}">{h(name)}</a></td>
           <td class="mono">{h(Path(image_path).name)}</td>
@@ -151,13 +165,14 @@ def page_home(root):
           <td>{total_artifacts:,}</td>
           <td>{wallet_hits:,}</td>
           <td>{h(str(last_run)[:19])}</td>
+          <td style="text-align:center">{map_cell}</td>
         </tr>"""
 
     body = f"""<div class="panel">
       <p class="count">{len(dbs)} database(s) found under <code>{h(root)}</code></p>
       <table style="margin-top:10px">
         <tr><th>Database</th><th>Image</th><th>DB Size</th>
-            <th>Files</th><th>Artifacts</th><th>Wallet Hits</th><th>Last Run</th></tr>
+            <th>Files</th><th>Artifacts</th><th>Wallet Hits</th><th>Last Run</th><th>Map</th></tr>
         {rows_html}
       </table>
     </div>"""
@@ -196,36 +211,48 @@ def page_db(db_path):
     except Exception as e:
         runs_html = f'<p class="err">{h(str(e))}</p>'
 
-    # counts — map each to the correct existing route
-    COUNTS = [
-        ("files",               "SELECT COUNT(*) FROM files",               "/search",   "&#128196; Files"),
-        ("wallet candidates",   "SELECT COUNT(*) FROM wallet_candidates",    "/wallets",  "&#128179; Wallets"),
-        ("picture candidates",  "SELECT COUNT(*) FROM picture_candidates",   "/pictures", "&#128247; Pictures"),
-        ("artifacts",           "SELECT COUNT(*) FROM recovered_artifacts",  "/artifacts","&#128230; Artifacts"),
-        ("bulk hits",           "SELECT COUNT(*) FROM bulk_extractor_hits",  "/bulk_hits","&#128202; Bulk Hits"),
-        ("findings",            "SELECT COUNT(*) FROM findings",             "/findings", "&#128270; Findings"),
-    ]
+    # counts with links — Pictures counts both scored candidates and carved image artifacts
     enc = urllib.parse.quote(db_path)
+    pic_count = (
+        (query_scalar(db_path, "SELECT COUNT(*) FROM picture_candidates") or 0) +
+        (query_scalar(db_path,
+            "SELECT COUNT(*) FROM recovered_artifacts WHERE mime_type LIKE 'image/%'") or 0)
+    )
+    COUNTS = [
+        ("SELECT COUNT(*) FROM files",              "/search",   "&#128196; Files",
+         "All files indexed from the filesystem (TSK/fiwalk), including deleted entries"),
+        ("SELECT COUNT(*) FROM wallet_candidates",  "/wallets",  "&#128179; Wallets",
+         "Files scored for wallet keywords/extensions by image-detect-wallets.sh"),
+        (None,                                      "/pictures", "&#128247; Pictures",
+         "Filesystem picture candidates + carved image artifacts (JPEG, PNG, BMP, GIF …)"),
+        ("SELECT COUNT(*) FROM recovered_artifacts","/artifacts","&#128230; Artifacts",
+         "All files recovered by carving tools: foremost, scalpel, PhotoRec, extundelete, ext4magic"),
+        ("SELECT COUNT(*) FROM bulk_extractor_hits","/bulk_hits","&#128202; Bulk Hits",
+         "Feature hits from bulk_extractor: URLs, email addresses, Bitcoin addresses, credit cards …"),
+        ("SELECT COUNT(*) FROM findings",           "/findings", "&#128270; Findings",
+         "Structured findings from exiftool (GPS/EXIF), YARA, regripper, rifiuti2, plaso, pdf-extract"),
+    ]
     counts_html = ""
-    for label, sql, route, icon in COUNTS:
-        n = query_scalar(db_path, sql) or 0
+    for sql, route, icon, tip in COUNTS:
+        n = pic_count if sql is None else (query_scalar(db_path, sql) or 0)
         counts_html += (
-            f'<a href="{route}?db={enc}" style="margin-right:16px">'
+            f'<a href="{route}?db={enc}" style="margin-right:16px" title="{h(tip)}">'
             f'<span class="badge ok">{n:,}</span> {icon}</a>'
         )
 
+    # extra links not covered by count badges
+    map_path = (info['ddrescue_map_path'] if info and info['ddrescue_map_path'] else
+                query_scalar(db_path, "SELECT ddrescue_map_path FROM image_info WHERE id=1") or "")
+    map_link = (f' &nbsp; <a href="/mapview?db={enc}" title="Visual block map of ddrescue imaging coverage">&#128209; ddrescue Map</a>'
+                if map_path and os.path.isfile(map_path) else "")
+
     body = f"""
     <div class="panel"><h2>Image Info</h2>{info_html}</div>
-    <div class="panel"><h2>Quick Counts</h2><p>{counts_html}</p>
+    <div class="panel"><h2>Quick Links</h2>
+      <p>{counts_html}</p>
       <p style="margin-top:10px">
-        <a href="/timeline?db={enc}">&#128337; Timeline</a> &nbsp;
-        <a href="/wallets?db={enc}">&#128179; Wallets</a> &nbsp;
-        <a href="/pictures?db={enc}">&#128247; Pictures</a> &nbsp;
-        <a href="/findings?db={enc}">&#128270; Findings</a> &nbsp;
-        <a href="/search?db={enc}">&#128269; File Search</a> &nbsp;
-        <a href="/artifacts?db={enc}">&#128230; Artifacts</a> &nbsp;
-        <a href="/bulk_hits?db={enc}">&#128202; Bulk Hits</a> &nbsp;
-        <a href="/sql?db={enc}">&#9998; SQL Query</a>
+        <a href="/timeline?db={enc}" title="Chronological event timeline assembled from all analysis stages">&#128337; Timeline</a> &nbsp;
+        <a href="/sql?db={enc}" title="Run read-only SELECT queries directly against the analysis database">&#9998; SQL Query</a>{map_link}
       </p>
     </div>
     <div class="panel"><h2>Stage Run History</h2>{runs_html}</div>
@@ -249,6 +276,7 @@ def page_wallets(db_path, limit=200):
 
 
 def page_pictures(db_path, limit=500):
+    # Section 1: filesystem-aware scored candidates (from image-detect-pictures.sh)
     try:
         cols, rows = run_query(db_path, f"""
             SELECT pc.score, pc.reason, pc.camera_model, pc.taken_at,
@@ -258,10 +286,61 @@ def page_pictures(db_path, limit=500):
             LEFT JOIN files f ON f.id = pc.file_id
             ORDER  BY pc.score DESC, f.path
             LIMIT  {limit}""")
-        body = f'<div class="panel">{table_html(cols, rows)}</div>'
+        cand_html = table_html(cols, rows)
+        if not rows:
+            cand_html = '<p class="count">No filesystem-indexed picture candidates. The disk may have no image files in its partition table, or the detect-pictures stage found none.</p>'
     except Exception as e:
-        body = f'<div class="panel err">{h(str(e))}</div>'
-    return page("Picture Candidates", body, db_name=db_path, nav_extra=' &rsaquo; pictures')
+        cand_html = f'<p class="err">{h(str(e))}</p>'
+
+    # Section 2: image artifacts with per-row View link (Option 2) + gallery link (Option 1)
+    enc = urllib.parse.quote(db_path)
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        img_rows = conn.execute(
+            "SELECT method, mime_type, size_bytes, relative_path, full_path FROM recovered_artifacts "
+            f"WHERE mime_type LIKE 'image/%' ORDER BY method, mime_type, size_bytes DESC LIMIT {limit}"
+        ).fetchall()
+        conn.close()
+
+        tbl = ('<p class="count">' + str(len(img_rows)) + ' row(s)</p>'
+               '<div style="overflow-x:auto"><table>'
+               '<tr><th>Method</th><th>MIME</th><th>Size (B)</th><th>Path</th><th>View</th></tr>')
+        for r in img_rows:
+            fp = r["full_path"] or ""
+            fenc = urllib.parse.quote(fp)
+            view = (f'<a href="/file?path={fenc}" target="_blank" '
+                    f'title="Open image in new tab">&#128247;</a>' if fp else "")
+            tbl += (f'<tr><td>{h(r["method"])}</td><td>{h(r["mime_type"])}</td>'
+                    f'<td>{(r["size_bytes"] or 0):,}</td>'
+                    f'<td style="word-break:break-all">{h(r["relative_path"])}</td>'
+                    f'<td style="text-align:center">{view}</td></tr>')
+        tbl += '</table></div>'
+        carved_html = tbl
+    except Exception as e:
+        carved_html = f'<p class="err">{h(str(e))}</p>'
+
+    body = f"""
+    <div class="panel">
+      <h2>Filesystem Picture Candidates</h2>
+      <p style="color:var(--sub);font-size:12px;margin-bottom:8px">
+        Scored by <code>image-detect-pictures.sh</code> from the filesystem index (TSK/fiwalk).
+      </p>
+      {cand_html}
+    </div>
+    <div class="panel">
+      <h2>Carved Image Artifacts</h2>
+      <p style="color:var(--sub);font-size:12px;margin-bottom:6px">
+        Files with <code>image/*</code> MIME type recovered by foremost, scalpel, PhotoRec, etc.
+        &nbsp;&nbsp;
+        <a href="/gallery?db={enc}"
+           style="background:#0f3460;padding:3px 10px;border-radius:3px;color:#7eb8f7"
+           title="Browse all carved images as a paginated thumbnail grid">&#128443; Gallery View</a>
+      </p>
+      {carved_html}
+    </div>
+    """
+    return page("Pictures", body, db_name=db_path, nav_extra=' &rsaquo; pictures')
 
 
 def page_files(db_path, pattern="", limit=500):
@@ -488,6 +567,290 @@ def page_findings(db_path, tool="", category="", limit=2000):
     return page("Findings", body, db_name=db_path, nav_extra=' &rsaquo; findings')
 
 
+# ── file serving & image gallery ─────────────────────────────────────────────
+
+def _safe_file_read(path, root):
+    """Read a file only if it resolves to a path inside root. Returns (bytes, mime) or (None, err)."""
+    try:
+        abs_path = os.path.realpath(path)
+        abs_root = os.path.realpath(root)
+        if not abs_path.startswith(abs_root + os.sep):
+            return None, "Forbidden: path is outside the recovery root"
+        if not os.path.isfile(abs_path):
+            return None, "File not found"
+        mime = mimetypes.guess_type(abs_path)[0] or "application/octet-stream"
+        with open(abs_path, "rb") as f:
+            return f.read(), mime
+    except OSError as e:
+        return None, str(e)
+
+
+def page_gallery(db_path, root, pg=0, per_page=48, all_images=False):
+    """Paginated (or all-on-one-page) image gallery."""
+    enc = urllib.parse.quote(db_path)
+    try:
+        total = query_scalar(db_path,
+            "SELECT COUNT(*) FROM recovered_artifacts WHERE mime_type LIKE 'image/%'") or 0
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        if all_images:
+            rows = conn.execute(
+                "SELECT full_path, mime_type, size_bytes, method FROM recovered_artifacts "
+                "WHERE mime_type LIKE 'image/%' ORDER BY method, full_path"
+            ).fetchall()
+        else:
+            offset = pg * per_page
+            rows = conn.execute(
+                "SELECT full_path, mime_type, size_bytes, method FROM recovered_artifacts "
+                "WHERE mime_type LIKE 'image/%' ORDER BY method, full_path "
+                f"LIMIT {per_page} OFFSET {offset}"
+            ).fetchall()
+        conn.close()
+    except Exception as e:
+        body = f'<div class="panel err">{h(str(e))}</div>'
+        return page("Image Gallery", body, db_name=db_path)
+
+    abs_root = os.path.realpath(root)
+
+    imgs = ""
+    for row in rows:
+        fp = row["full_path"] or ""
+        sz = row["size_bytes"] or 0
+        method = row["method"] or ""
+        if not fp or not os.path.realpath(fp).startswith(abs_root + os.sep) or not os.path.isfile(fp):
+            continue
+        fenc = urllib.parse.quote(fp)
+        tip = f"{Path(fp).name} — {method} — {sz:,} B"
+        imgs += (
+            f'<a href="/file?path={fenc}" target="_blank" title="{h(tip)}">'
+            f'<img src="/file?path={fenc}" loading="lazy" '
+            f'style="width:150px;height:112px;object-fit:cover;border-radius:4px;'
+            f'border:1px solid #333;background:#111">'
+            f'</a>'
+        )
+
+    btn_style = 'style="background:#0f3460;padding:3px 12px;border-radius:3px;color:#7eb8f7"'
+    if all_images:
+        header = f'<p class="count">{total:,} images — all on one page</p>'
+        toggle = f'<a href="/gallery?db={enc}" {btn_style}>&#9660; Paginated view</a>'
+        pager = ""
+    else:
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        offset = pg * per_page
+        prev_link = (f'<a href="/gallery?db={enc}&page={pg-1}">&larr; Prev</a>' if pg > 0 else "")
+        next_link = (f'<a href="/gallery?db={enc}&page={pg+1}">Next &rarr;</a>'
+                     if (offset + per_page) < total else "")
+        pager = " &nbsp; ".join(filter(None, [prev_link, next_link]))
+        header = f'<p class="count">{total:,} images &mdash; page {pg+1} of {total_pages} &nbsp; ({per_page} per page)</p>'
+        toggle = f'<a href="/gallery?db={enc}&all=1" {btn_style}>&#9651; View all on one page</a>'
+
+    body = f"""
+    <div class="panel">
+      {header}
+      <p style="margin-top:8px">{toggle}{(" &nbsp;&nbsp; " + pager) if pager else ""}</p>
+    </div>
+    <div class="panel">
+      <div style="display:flex;flex-wrap:wrap;gap:6px">{imgs or '<p class="count">No images found.</p>'}</div>
+    </div>
+    {"<div class='panel'><p>" + pager + "</p></div>" if pager else ""}
+    """
+    return page("Image Gallery", body, db_name=db_path, nav_extra=" &rsaquo; gallery")
+
+
+# ── ddrescue map visualization ───────────────────────────────────────────────
+
+def parse_mapfile(path):
+    """Parse a GNU ddrescue mapfile. Returns (meta, blocks).
+
+    meta  — dict: current_pos, current_status, current_pass, start_time,
+                  current_time, finished, command_line
+    blocks — list of (pos_bytes: int, size_bytes: int, status_char: str)
+    """
+    meta = {k: None for k in ('current_pos', 'current_status', 'current_pass',
+                               'start_time', 'current_time', 'command_line')}
+    meta['finished'] = False
+    blocks = []
+    section = None  # 'header' | 'data'
+
+    try:
+        with open(path, 'r', errors='replace') as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line:
+                    continue
+                if line.startswith('#'):
+                    c = line[1:].strip()
+                    if c.startswith('Command line:'):
+                        meta['command_line'] = c[len('Command line:'):].strip()
+                    elif c.startswith('Start time:'):
+                        meta['start_time'] = c[len('Start time:'):].strip()
+                    elif c.startswith('Current time:'):
+                        meta['current_time'] = c[len('Current time:'):].strip()
+                    elif 'Finished' in c:
+                        meta['finished'] = True
+                    elif 'current_pos' in c:
+                        section = 'header'
+                    elif 'pos' in c and 'size' in c and 'status' in c:
+                        section = 'data'
+                    continue
+                parts = line.split()
+                if section == 'header' and len(parts) >= 2:
+                    try:
+                        meta['current_pos'] = int(parts[0], 16)
+                        meta['current_status'] = parts[1]
+                        if len(parts) >= 3:
+                            meta['current_pass'] = int(parts[2])
+                    except ValueError:
+                        pass
+                    section = 'data'
+                elif section == 'data' and len(parts) >= 3:
+                    try:
+                        blocks.append((int(parts[0], 16), int(parts[1], 16), parts[2]))
+                    except ValueError:
+                        pass
+    except OSError:
+        pass
+
+    return meta, blocks
+
+
+def _map_svg(blocks, cols=200, cell_w=5, cell_h=5):
+    """Rasterize ddrescue blocks as a colored SVG grid.
+
+    Returns (svg_html, stats_dict).  Uses worst-status-wins per cell so a
+    single bad block in a region isn't hidden by surrounding good data.
+    """
+    if not blocks:
+        return '<p class="count">No blocks in map file.</p>', {}
+
+    total_size = max(pos + sz for pos, sz, _ in blocks)
+    if total_size == 0:
+        return '<p class="count">Map covers zero bytes.</p>', {}
+
+    target = 5000
+    bpc = max(512, (total_size + target - 1) // target)  # bytes per cell
+    num_cells = (total_size + bpc - 1) // bpc
+    rows = (num_cells + cols - 1) // cols
+    num_pad = rows * cols  # padded so last row is complete
+
+    # None = no block seen yet for this cell; filled in below
+    cell_st = [None] * num_pad
+
+    for pos, sz, st in blocks:
+        c0 = pos // bpc
+        c1 = min(num_pad - 1, (pos + sz - 1) // bpc)
+        prio = _MAP_PRIORITY.get(st, 5)
+        for c in range(c0, c1 + 1):
+            existing = cell_st[c]
+            if existing is None or prio < _MAP_PRIORITY.get(existing, 5):
+                cell_st[c] = st
+
+    pad = 2
+    svg_w = cols * cell_w + 2 * pad
+    svg_h = rows * cell_h + 2 * pad
+
+    rects = []
+    for idx in range(num_pad):
+        st = cell_st[idx] or '-'   # uncovered cells → non-tried
+        color = _MAP_STATUS.get(st, ('#888', 'unknown'))[0]
+        cx = pad + (idx % cols) * cell_w
+        cy = pad + (idx // cols) * cell_h
+        rects.append(f'<rect x="{cx}" y="{cy}" width="{cell_w}" height="{cell_h}" fill="{color}"/>')
+
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{svg_w}" height="{svg_h}" '
+        f'style="display:block;background:#111;border-radius:4px">'
+        + ''.join(rects) + '</svg>'
+    )
+
+    byte_stats = {}
+    for _, sz, st in blocks:
+        byte_stats[st] = byte_stats.get(st, 0) + sz
+
+    return svg, {'total_size': total_size, 'bpc': bpc, 'bytes': byte_stats}
+
+
+def page_mapview(map_path, db_path=""):
+    if not map_path:
+        body = ('<div class="panel err"><p>No map file specified. '
+                'Use <code>?map=/path/to/file.map</code> or <code>?db=/path/to/db</code>.</p></div>')
+        return page("ddrescue Map View", body, db_name=db_path)
+    if not os.path.isfile(map_path):
+        body = f'<div class="panel err"><p>Map file not found: <code>{h(map_path)}</code></p></div>'
+        return page("ddrescue Map View", body, db_name=db_path)
+
+    meta, blocks = parse_mapfile(map_path)
+    svg, stats = _map_svg(blocks)
+
+    # metadata table
+    rows_m = []
+    for label, key in [("Start time", "start_time"), ("Last updated", "current_time")]:
+        if meta.get(key):
+            rows_m.append(f"<tr><th>{label}</th><td>{h(meta[key])}</td></tr>")
+    if meta.get('current_pos') is not None:
+        cp = meta['current_pos']
+        rows_m.append(f"<tr><th>Current position</th><td>{hex(cp)} &nbsp;({cp:,} B)</td></tr>")
+    if meta.get('current_status'):
+        sname = _MAP_STATUS.get(meta['current_status'], ('#888', meta['current_status']))[1]
+        rows_m.append(f"<tr><th>Current status</th><td>{h(sname)}</td></tr>")
+    if meta.get('current_pass') is not None:
+        rows_m.append(f"<tr><th>Current pass</th><td>{meta['current_pass']}</td></tr>")
+    rows_m.append(f"<tr><th>Finished</th><td>{'&#9989; Yes' if meta['finished'] else '&#9203; In progress'}</td></tr>")
+    rows_m.append(f"<tr><th>Data blocks</th><td>{len(blocks):,}</td></tr>")
+    total = stats.get('total_size', 0)
+    if total:
+        rows_m.append(f"<tr><th>Total size</th><td>{total:,} B &nbsp;({total/1e9:.2f} GB)</td></tr>")
+    if stats.get('bpc'):
+        rows_m.append(f"<tr><th>Map resolution</th><td>{stats['bpc']:,} B per display cell</td></tr>")
+    meta_html = "<table>" + "".join(rows_m) + "</table>"
+
+    # coverage stats
+    byte_stats = stats.get('bytes', {})
+    total_b = stats.get('total_size', 1) or 1
+    stat_rows = []
+    for st, (color, label) in _MAP_STATUS.items():
+        amount = byte_stats.get(st, 0)
+        if amount == 0:
+            continue
+        pct = amount / total_b * 100
+        bar = f'<div style="background:{color};width:{min(100, pct):.1f}%;height:12px;border-radius:2px"></div>'
+        swatch = (f'<span style="display:inline-block;width:12px;height:12px;'
+                  f'background:{color};border-radius:2px;vertical-align:middle"></span>')
+        stat_rows.append(
+            f"<tr><td>{swatch} {h(label)}</td>"
+            f"<td>{amount/1e9:.3f} GB</td>"
+            f"<td>{pct:.2f}%</td>"
+            f"<td style='width:200px'>{bar}</td></tr>"
+        )
+    stats_html = (
+        "<table><tr><th>Status</th><th>Size</th><th>%</th><th></th></tr>"
+        + "".join(stat_rows) + "</table>"
+    ) if stat_rows else "<p class='count'>No blocks to summarise.</p>"
+
+    # legend
+    legend_parts = []
+    for st, (color, label) in _MAP_STATUS.items():
+        sw = (f'<span style="display:inline-block;width:12px;height:12px;background:{color};'
+              f'border-radius:2px;vertical-align:middle;margin-right:3px"></span>')
+        legend_parts.append(f'{sw}{h(label)} <code style="color:#888">({st})</code>')
+    legend = " &nbsp;&nbsp; ".join(legend_parts)
+
+    body = f"""
+    <div class="panel">
+      <h2>{h(Path(map_path).name)}</h2>
+      <p style="color:var(--sub);font-size:11px;margin-bottom:10px;word-break:break-all">{h(map_path)}</p>
+      {meta_html}
+    </div>
+    <div class="panel">
+      <h2>Coverage Map</h2>
+      <p style="color:var(--sub);font-size:12px;margin-bottom:8px">{legend}</p>
+      {svg}
+    </div>
+    <div class="panel"><h2>Coverage Statistics</h2>{stats_html}</div>
+    """
+    return page("ddrescue Map View", body, db_name=db_path, nav_extra=" &rsaquo; mapview")
+
+
 # ── request handler ───────────────────────────────────────────────────────────
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -561,6 +924,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
             elif p == "/sql":
                 self.send_html(page_sql(db))
+            elif p == "/mapview":
+                map_path = self.qsval("map")
+                if not map_path and db and os.path.isfile(db):
+                    map_path = query_scalar(db, "SELECT ddrescue_map_path FROM image_info WHERE id=1") or ""
+                self.send_html(page_mapview(map_path, db_path=db))
+            elif p == "/file":
+                file_path = self.qsval("path")
+                data, mime_or_err = _safe_file_read(file_path, self.root)
+                if data is None:
+                    self.send_html(page("Error", f'<p class="err">{h(mime_or_err)}</p>'), 403)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", mime_or_err)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.end_headers()
+                    self.wfile.write(data)
+                return
+            elif p == "/gallery":
+                all_images = self.qsval("all") == "1"
+                try:
+                    pg = max(0, int(self.qsval("page", "0") or "0"))
+                except ValueError:
+                    pg = 0
+                self.send_html(page_gallery(db, self.root, pg, all_images=all_images))
             else:
                 self.send_html(page("404", "<p>Not found.</p>"), 404)
         except Exception as e:
