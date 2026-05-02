@@ -113,7 +113,7 @@ Status: complete
 Notes: Local smoke used a blank JPEG, a 4x4 thumbnail, and a synthetic high-entropy image; it verified quality_score population and ordering. Owner can set `REAL_PHOTO` in the smoke test to verify an actual photo fixture.
 
 ## T10 — KeePass cracking
-Commit: pending
+Commit: 83998d4
 Status: complete
 
 - [pending-owner-verification] KDBX 3 file with weak password cracks via hashcat path — see tests/smoke/T10-crack-keepass.sh
@@ -121,3 +121,12 @@ Status: complete
 - [pending-owner-verification] `crack_tasks.hash_mode` is `'13400'` for hashcat path, `'argon2-keepass4brute'` for keepass4brute path — see tests/smoke/T10-crack-keepass.sh
 
 Notes: Local dry-run used a synthetic KDBX4 header to confirm routing and clear CPU opt-in messaging. Hashcat and keepass4brute execution need fixtures and container/GPU verification. keepass4brute is pinned to `6e0b1a0e11daaa674653c5f15f8d06ba2164c335`.
+
+## T11 — Plaso psort crypto-keyword filter
+Commit: pending
+Status: complete
+
+- [pending-owner-verification] Running `image-plaso.sh` against a DB with an existing .plaso file produces both the full timeline (existing behavior) and the new crypto sub-timeline — see tests/smoke/T11-plaso-crypto.sh
+- [pending-owner-verification] `findings` table gains rows with `source_tool='plaso'` and `category='timeline'` — see tests/smoke/T11-plaso-crypto.sh
+
+Notes: Local checks covered shell syntax, help output, and dry-run. Real plaso execution requires container tools and a recovered corpus/plaso fixture.
