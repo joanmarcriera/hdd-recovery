@@ -93,7 +93,7 @@ Status: complete
 Notes: Local checks covered shell syntax, help output, and dry-run on an empty DB. Real Volatility3 execution requires Docker/container tooling and winmem-extract artifacts from T7a.
 
 ## T8 — Photo deduplication via perceptual hash
-Commit: pending
+Commit: 7e17de5
 Status: complete
 
 - [pending-owner-verification] After running, every image artifact has `dedup_cluster_id` set — see tests/smoke/T8-dedup-photos.sh
@@ -101,3 +101,13 @@ Status: complete
 - [pending-owner-verification] Re-running without `--force` is a no-op — see tests/smoke/T8-dedup-photos.sh
 
 Notes: Local checks covered shell syntax, help output, and dry-run. Full execution needs the container imagehash/Pillow install.
+
+## T9 — Image quality scoring
+Commit: pending
+Status: complete
+
+- [pass] Running enrich-photos populates `quality_score` for all image artifacts
+- [pass] Visibly-corrupt images (truncated JPEGs, blank canvases) score low
+- [pending-owner-verification] Real photos score high — see tests/smoke/T9-enrich-photos-quality.sh
+
+Notes: Local smoke used a blank JPEG, a 4x4 thumbnail, and a synthetic high-entropy image; it verified quality_score population and ordering. Owner can set `REAL_PHOTO` in the smoke test to verify an actual photo fixture.
