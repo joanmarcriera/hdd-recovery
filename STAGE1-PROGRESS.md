@@ -66,7 +66,7 @@ Status: complete
 Notes: Local checks passed for `lib.seed_scan`, OCR Python compile, PDF/text shell syntax, and the text scanner smoke test. The OCR/PDF regression needs owner fixtures plus `pdftotext` and `tesseract`.
 
 ## T6 — TrID enrichment
-Commit: pending
+Commit: f27bca7
 Status: complete
 
 - [pending-owner-verification] `trid --version` works inside container — see tests/smoke/T6-trid.sh
@@ -75,3 +75,11 @@ Status: complete
 - [pending-owner-verification] Original file paths in `recovered_artifacts.full_path` are unchanged after the script runs (assert this in the smoke test) — see tests/smoke/T6-trid.sh
 
 Notes: Local checks covered shell syntax and dry-run. TrID itself is installed from mark0.net during Docker build, which is pending owner verification in the container environment. The script intentionally never invokes TrID `--ae`.
+
+## T7a — Extract Windows memory artifacts
+Commit: pending
+Status: complete
+
+- [pending-owner-verification] A Windows image yields hiberfil.sys + pagefile.sys at `<export_root>/winmem/`, registered in `recovered_artifacts` — see tests/smoke/T7a-extract-winmem.sh
+
+Notes: Local checks covered shell syntax, help output, and dry-run on an empty DB. Real extraction requires a TSK-indexed Windows image fixture.
