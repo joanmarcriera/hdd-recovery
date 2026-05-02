@@ -35,7 +35,7 @@ Status: complete
 Notes: Local CPU-only check exited 1 with the helper's hard-fail diagnostic. Docker build and GPU-positive verification are pending owner hardware/container validation.
 
 ## T3 — image-crack-wallet.sh
-Commit: pending
+Commit: 3a754b1
 Status: complete
 
 - [pass] Without `--run`, prints the `bitcoin2john` and `hashcat` commands it would execute, plus the GPU detection result
@@ -45,3 +45,13 @@ Status: complete
 - [pass] On a host without `--gpus all`: refuses to run unless `--cpu-fallback` was passed
 
 Notes: Local verification used a synthetic encrypted wallet_keys row to confirm dry-run output and no-GPU hard refusal. Full cracking, pause, and resume need a weak encrypted wallet fixture plus GPU/container execution.
+
+## T4 — btcrecover wrapper
+Commit: pending
+Status: complete
+
+- [pass] `bin/image-btcrecover.sh --help` prints usage and links to btcrecover docs
+- [pending-owner-verification] A config file targeting a known-good test seed (11 of 12 words, 1 missing) cracks within the timeout when `--run` is given — see tests/smoke/T4-btcrecover.sh
+- [pending-owner-verification] TUI stage is `is_optional=True, is_manual=True` — operator must explicitly invoke — see tests/smoke/T4-btcrecover.sh
+
+Notes: Local wrapper verification used a fake `echo found:` command to confirm `crack_tasks` and `wallet_keys` imports. Real btcrecover execution is pending container verification.

@@ -58,6 +58,9 @@ RUN git clone https://github.com/Great-Software-Company/pywallet.git /opt/pywall
     && ln -sf /opt/pywallet/run_pywallet.sh /usr/local/bin/pywallet \
     && python3 -c 'import pywallet'
 
+# ── btcrecover ───────────────────────────────────────────────────────────────
+RUN python3 -m pip install --break-system-packages btcrecover
+
 # ── ttyd: download static binary (not in Kali apt) ───────────────────────────
 RUN ARCH=$(dpkg --print-architecture) && \
     case "$ARCH" in \
