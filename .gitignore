@@ -4,6 +4,8 @@ tui/__pycache__/
 tui/**/__pycache__/
 tui/*.pyc
 tui/**/*.pyc
+bin/__pycache__/
+bin/**/__pycache__/
 *.egg-info/
 
 # Recovery data — never commit these
@@ -14,8 +16,9 @@ tui/**/*.pyc
 *.analysis.sqlite-wal
 *.analysis.sqlite-shm
 
-# Per-disk job configs contain device paths — keep template only
+# Per-disk job configs and run scripts contain device paths — keep template only
 jobs/*.conf
+jobs/*.sh
 !jobs/ddrescue-job-template.conf
 
 # Export outputs and logs
@@ -28,6 +31,8 @@ reports/
 
 # Docker env file contains credentials — never commit
 docker/.env
+docker/*.log
+docker/*.log.gz
 
 # OS / editor noise
 .DS_Store
