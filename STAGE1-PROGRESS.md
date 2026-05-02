@@ -85,9 +85,19 @@ Status: complete
 Notes: Local checks covered shell syntax, help output, and dry-run on an empty DB. Real extraction requires a TSK-indexed Windows image fixture.
 
 ## T7b — Volatility3 scan
-Commit: pending
+Commit: c26aec1
 Status: complete
 
 - [pending-owner-verification] Against a known-good Windows hiberfil.sys test fixture, the scan completes and produces findings rows. (Use a small synthetic memory dump if a real fixture is unavailable.) — see tests/smoke/T7b-volatility.sh
 
 Notes: Local checks covered shell syntax, help output, and dry-run on an empty DB. Real Volatility3 execution requires Docker/container tooling and winmem-extract artifacts from T7a.
+
+## T8 — Photo deduplication via perceptual hash
+Commit: pending
+Status: complete
+
+- [pending-owner-verification] After running, every image artifact has `dedup_cluster_id` set — see tests/smoke/T8-dedup-photos.sh
+- [pending-owner-verification] Each cluster has exactly one row with `is_cluster_primary=1` — see tests/smoke/T8-dedup-photos.sh
+- [pending-owner-verification] Re-running without `--force` is a no-op — see tests/smoke/T8-dedup-photos.sh
+
+Notes: Local checks covered shell syntax, help output, and dry-run. Full execution needs the container imagehash/Pillow install.

@@ -64,6 +64,9 @@ RUN python3 -m pip install --break-system-packages btcrecover
 # ── Volatility3 ──────────────────────────────────────────────────────────────
 RUN python3 -m pip install --break-system-packages volatility3
 
+# ── Photo perceptual hashing ─────────────────────────────────────────────────
+RUN python3 -m pip install --break-system-packages imagehash
+
 # ── TrID file identifier ─────────────────────────────────────────────────────
 ARG TRID_VERSION=2.47
 ARG TRID_DEFS_DATE=20260414
