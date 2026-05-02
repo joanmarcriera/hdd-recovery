@@ -65,6 +65,33 @@ ensure_db() {
   [[ -n "${1:-}" ]] || die "database path is required"
   ensure_parent_dir "$1"
   sqlite3 "$1" < "$SCHEMA_FILE" >/dev/null
+  apply_schema_migrations "$1"
+}
+
+apply_schema_migrations() {
+  local db="$1"
+  python3 - "$db" <<'PY'
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+migrations = [
+    ("recovered_artifacts", "trid_top_ext", "TEXT"),
+    ("recovered_artifacts", "trid_top_score", "REAL"),
+    ("recovered_artifacts", "trid_top3_json", "TEXT"),
+    ("recovered_artifacts", "dedup_cluster_id", "INTEGER"),
+    ("recovered_artifacts", "is_cluster_primary", "INTEGER DEFAULT 0"),
+    ("recovered_artifacts", "quality_score", "REAL"),
+]
+
+conn = sqlite3.connect(db_path)
+for table, column, definition in migrations:
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+conn.commit()
+conn.close()
+PY
 }
 
 db_value() {

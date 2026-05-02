@@ -122,9 +122,51 @@ CREATE TABLE IF NOT EXISTS recovered_artifacts (
   source_run_id INTEGER,
   created_at TEXT NOT NULL,
   notes TEXT,
+  trid_top_ext TEXT,
+  trid_top_score REAL,
+  trid_top3_json TEXT,
+  dedup_cluster_id INTEGER,
+  is_cluster_primary INTEGER DEFAULT 0,
+  quality_score REAL,
   UNIQUE(method, relative_path),
   FOREIGN KEY (source_run_id) REFERENCES scan_runs(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS crack_tasks (
+  id INTEGER PRIMARY KEY,
+  cracker TEXT NOT NULL,
+  target_artifact_id INTEGER,
+  target_kind TEXT NOT NULL,
+  hash_mode TEXT,
+  wordlist_path TEXT,
+  rules_path TEXT,
+  checkpoint_path TEXT,
+  progress_pct REAL,
+  eta_seconds INTEGER,
+  started_at TEXT,
+  paused_at TEXT,
+  ended_at TEXT,
+  status TEXT NOT NULL,
+  result_value TEXT,
+  notes TEXT,
+  FOREIGN KEY (target_artifact_id) REFERENCES recovered_artifacts(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_crack_status ON crack_tasks(status);
+
+CREATE TABLE IF NOT EXISTS wallet_keys (
+  id INTEGER PRIMARY KEY,
+  source_artifact_id INTEGER,
+  source_method TEXT NOT NULL,
+  key_type TEXT NOT NULL,
+  key_value TEXT NOT NULL,
+  address TEXT,
+  encrypted INTEGER NOT NULL DEFAULT 0,
+  decrypt_passphrase TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (source_artifact_id) REFERENCES recovered_artifacts(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_wallet_keys_type ON wallet_keys(key_type);
 
 CREATE TABLE IF NOT EXISTS bulk_extractor_hits (
   id INTEGER PRIMARY KEY,
