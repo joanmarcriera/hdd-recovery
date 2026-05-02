@@ -145,6 +145,38 @@ Started via the TUI or `python3 bin/image-serve.py --port 7788`. Routes:
 | `/search?db=<path>` | Filename search across `files` table |
 | `/sql?db=<path>` | Read-only SQL console (SELECT/WITH only) |
 
+#### Image gallery (`/gallery`)
+
+Linked from the Pictures page. Paginated (48/page) or all-on-one-page view with lazy loading. Features:
+- **Hover overlay**: llava description shown over thumbnail on mouse hover (CSS only, no JS)
+- **Tag count banner**: shows how many images have been tagged by llava out of the total
+- **Description search**: filters gallery to only images whose llava description matches the query
+- **View all / Paginated** toggle button
+
+#### LLM photo tagging (`bin/image-tag-photos.py`)
+
+Tags recovered images using a local Ollama vision model (default: `llava:7b`). Descriptions are stored in the `findings` table (`source_tool='llava'`, `category='photo-description'`). The job is fully resumable — already-tagged images are skipped.
+
+```bash
+# Tag real photos only (JPEG >= 20 KB) — ~3.5 h for 525 images at 21 s/image
+bin/image-tag-photos.py <db> --ollama http://<host>:11434
+
+# Dry-run: see candidates without calling Ollama
+bin/image-tag-photos.py <db> --dry-run
+
+# Tag all image/* types (includes web cache PNGs/BMPs/GIFs >= 10 KB)
+bin/image-tag-photos.py <db> --scope all
+
+# Options
+#   --min-size N     override minimum file size (bytes)
+#   --limit N        stop after N images (testing)
+#   --force          re-tag already-tagged images
+#   --model NAME     Ollama model (default: llava:7b)
+#   --prompt TEXT    custom prompt
+```
+
+The findings table is created automatically if absent. Progress is tracked in `scan_runs`. Interrupt with Ctrl-C and re-run to resume — already-tagged images are skipped.
+
 #### ddrescue map visualiser (`/mapview`)
 
 Parses GNU ddrescue mapfile format and renders an SVG block grid (~5000 cells) colour-coded by status:

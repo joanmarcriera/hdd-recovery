@@ -43,6 +43,11 @@ button:hover{opacity:.85}
 nav{margin-bottom:16px;font-size:13px}
 .mono{font-family:monospace;white-space:pre-wrap;font-size:12px}
 .count{color:var(--sub);font-size:12px}
+.img-card{position:relative;display:inline-block;line-height:0}
+.img-card .desc{display:none;position:absolute;bottom:0;left:0;right:0;
+  background:rgba(0,0,0,.82);color:#eee;font-size:10px;line-height:1.3;
+  padding:4px 5px;border-radius:0 0 4px 4px;white-space:normal}
+.img-card:hover .desc{display:block}
 """
 
 # ddrescue map status characters: (hex_color, display_label)
@@ -585,69 +590,122 @@ def _safe_file_read(path, root):
         return None, str(e)
 
 
-def page_gallery(db_path, root, pg=0, per_page=48, all_images=False):
-    """Paginated (or all-on-one-page) image gallery."""
+def page_gallery(db_path, root, pg=0, per_page=48, all_images=False, search=""):
+    """Paginated (or all-on-one-page) image gallery with LLM description search."""
     enc = urllib.parse.quote(db_path)
+    abs_root = os.path.realpath(root)
+    search = search.strip()
+
+    # Base query: LEFT JOIN findings for llava descriptions.
+    # When searching, switch to INNER JOIN so only tagged+matching images appear.
     try:
-        total = query_scalar(db_path,
-            "SELECT COUNT(*) FROM recovered_artifacts WHERE mime_type LIKE 'image/%'") or 0
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
+
+        tagged_total = conn.execute(
+            "SELECT COUNT(*) FROM recovered_artifacts ra "
+            "JOIN findings f ON f.artifact_id=ra.id AND f.source_tool='llava' AND f.key='description' "
+            "WHERE ra.mime_type LIKE 'image/%'"
+        ).fetchone()[0]
+
+        if search:
+            count_sql = (
+                "SELECT COUNT(*) FROM recovered_artifacts ra "
+                "JOIN findings f ON f.artifact_id=ra.id AND f.source_tool='llava' AND f.key='description' "
+                "WHERE ra.mime_type LIKE 'image/%' AND f.value LIKE ?"
+            )
+            total = conn.execute(count_sql, (f"%{search}%",)).fetchone()[0]
+            base_sql = (
+                "SELECT ra.id, ra.full_path, ra.mime_type, ra.size_bytes, ra.method, f.value AS description "
+                "FROM recovered_artifacts ra "
+                "JOIN findings f ON f.artifact_id=ra.id AND f.source_tool='llava' AND f.key='description' "
+                "WHERE ra.mime_type LIKE 'image/%' AND f.value LIKE ? "
+                "ORDER BY ra.method, ra.full_path"
+            )
+            base_params = (f"%{search}%",)
+        else:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM recovered_artifacts WHERE mime_type LIKE 'image/%'"
+            ).fetchone()[0]
+            base_sql = (
+                "SELECT ra.id, ra.full_path, ra.mime_type, ra.size_bytes, ra.method, "
+                "f.value AS description "
+                "FROM recovered_artifacts ra "
+                "LEFT JOIN findings f ON f.artifact_id=ra.id AND f.source_tool='llava' AND f.key='description' "
+                "WHERE ra.mime_type LIKE 'image/%' "
+                "ORDER BY ra.method, ra.full_path"
+            )
+            base_params = ()
+
         if all_images:
-            rows = conn.execute(
-                "SELECT full_path, mime_type, size_bytes, method FROM recovered_artifacts "
-                "WHERE mime_type LIKE 'image/%' ORDER BY method, full_path"
-            ).fetchall()
+            rows = conn.execute(base_sql, base_params).fetchall()
         else:
             offset = pg * per_page
             rows = conn.execute(
-                "SELECT full_path, mime_type, size_bytes, method FROM recovered_artifacts "
-                "WHERE mime_type LIKE 'image/%' ORDER BY method, full_path "
-                f"LIMIT {per_page} OFFSET {offset}"
+                base_sql + f" LIMIT {per_page} OFFSET {offset}", base_params
             ).fetchall()
         conn.close()
     except Exception as e:
         body = f'<div class="panel err">{h(str(e))}</div>'
         return page("Image Gallery", body, db_name=db_path)
 
-    abs_root = os.path.realpath(root)
-
+    # Build image grid
     imgs = ""
     for row in rows:
         fp = row["full_path"] or ""
         sz = row["size_bytes"] or 0
         method = row["method"] or ""
+        desc = row["description"] or ""
         if not fp or not os.path.realpath(fp).startswith(abs_root + os.sep) or not os.path.isfile(fp):
             continue
         fenc = urllib.parse.quote(fp)
         tip = f"{Path(fp).name} — {method} — {sz:,} B"
+        desc_div = (f'<div class="desc">{h(desc[:200])}</div>' if desc else "")
         imgs += (
-            f'<a href="/file?path={fenc}" target="_blank" title="{h(tip)}">'
+            f'<a href="/file?path={fenc}" target="_blank" class="img-card" title="{h(tip)}">'
             f'<img src="/file?path={fenc}" loading="lazy" '
             f'style="width:150px;height:112px;object-fit:cover;border-radius:4px;'
             f'border:1px solid #333;background:#111">'
-            f'</a>'
+            f'{desc_div}</a>'
         )
 
-    btn_style = 'style="background:#0f3460;padding:3px 12px;border-radius:3px;color:#7eb8f7"'
+    # Controls
+    senc = urllib.parse.quote(search)
+    btn = 'style="background:#0f3460;padding:3px 12px;border-radius:3px;color:#7eb8f7"'
+    search_box = f"""<form method="get" action="/gallery" style="display:inline-flex;gap:6px;align-items:center">
+      <input type="hidden" name="db" value="{h(db_path)}">
+      <input type="text" name="search" value="{h(search)}" placeholder="Search descriptions…"
+             style="width:220px" title="Search llava descriptions — only tagged images are searched">
+      <button type="submit">Search</button>
+      {"<a href='/gallery?db=" + enc + "' style='color:var(--sub)'>Clear</a>" if search else ""}
+    </form>"""
+
     if all_images:
-        header = f'<p class="count">{total:,} images — all on one page</p>'
-        toggle = f'<a href="/gallery?db={enc}" {btn_style}>&#9660; Paginated view</a>'
+        header = f'<p class="count">{total:,} image(s) — all on one page</p>'
+        toggle = f'<a href="/gallery?db={enc}{"&search=" + senc if search else ""}" {btn}>&#9660; Paginated view</a>'
         pager = ""
     else:
         total_pages = max(1, (total + per_page - 1) // per_page)
         offset = pg * per_page
-        prev_link = (f'<a href="/gallery?db={enc}&page={pg-1}">&larr; Prev</a>' if pg > 0 else "")
-        next_link = (f'<a href="/gallery?db={enc}&page={pg+1}">Next &rarr;</a>'
-                     if (offset + per_page) < total else "")
+        pg_base = f"/gallery?db={enc}" + (f"&search={senc}" if search else "")
+        prev_link = f'<a href="{pg_base}&page={pg-1}">&larr; Prev</a>' if pg > 0 else ""
+        next_link = f'<a href="{pg_base}&page={pg+1}">Next &rarr;</a>' if (offset + per_page) < total else ""
         pager = " &nbsp; ".join(filter(None, [prev_link, next_link]))
-        header = f'<p class="count">{total:,} images &mdash; page {pg+1} of {total_pages} &nbsp; ({per_page} per page)</p>'
-        toggle = f'<a href="/gallery?db={enc}&all=1" {btn_style}>&#9651; View all on one page</a>'
+        header = f'<p class="count">{total:,} image(s) &mdash; page {pg+1} of {total_pages} &nbsp; ({per_page} per page)</p>'
+        all_href = f"/gallery?db={enc}&all=1" + (f"&search={senc}" if search else "")
+        toggle = f'<a href="{all_href}" {btn}>&#9651; View all on one page</a>'
+
+    tag_note = (f'<span class="count" style="margin-left:12px">'
+                f'&#127381; {tagged_total:,} of {total:,} tagged by llava</span>'
+                if not search else
+                f'<span class="count" style="margin-left:12px">Showing {total:,} matches in llava descriptions</span>')
 
     body = f"""
     <div class="panel">
-      {header}
-      <p style="margin-top:8px">{toggle}{(" &nbsp;&nbsp; " + pager) if pager else ""}</p>
+      {header}{tag_note}
+      <p style="margin-top:10px;display:flex;align-items:center;flex-wrap:wrap;gap:8px">
+        {toggle} &nbsp;&nbsp; {search_box}
+      </p>
     </div>
     <div class="panel">
       <div style="display:flex;flex-wrap:wrap;gap:6px">{imgs or '<p class="count">No images found.</p>'}</div>
@@ -943,11 +1001,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return
             elif p == "/gallery":
                 all_images = self.qsval("all") == "1"
+                search = self.qsval("search")
                 try:
                     pg = max(0, int(self.qsval("page", "0") or "0"))
                 except ValueError:
                     pg = 0
-                self.send_html(page_gallery(db, self.root, pg, all_images=all_images))
+                self.send_html(page_gallery(db, self.root, pg, all_images=all_images, search=search))
             else:
                 self.send_html(page("404", "<p>Not found.</p>"), 404)
         except Exception as e:
