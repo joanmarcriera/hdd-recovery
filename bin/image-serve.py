@@ -8,10 +8,20 @@ a given root directory.  All SQL executed is restricted to SELECT/WITH.
 Usage:
   image-serve.py [--root DIR] [--port PORT] [--host HOST]
 """
-import argparse, glob, html, http.server, io, json, mimetypes, os, re
-import sqlite3, sys, threading, urllib.parse
+import argparse, glob, html, http.server, importlib.util, io, json, mimetypes, os, re
+import shlex, sqlite3, subprocess, sys, threading, urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Load PRESETS from image-pipeline.py so the form mirrors the CLI runner.
+_PIPELINE_PATH = Path(__file__).resolve().parent / "image-pipeline.py"
+try:
+    _spec = importlib.util.spec_from_file_location("image_pipeline", _PIPELINE_PATH)
+    _pipeline_mod = importlib.util.module_from_spec(_spec)
+    _spec.loader.exec_module(_pipeline_mod)
+    PIPELINE_PRESETS: dict[str, list[str]] = dict(_pipeline_mod.PRESETS)
+except Exception:
+    PIPELINE_PRESETS = {}
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -48,6 +58,66 @@ nav{margin-bottom:16px;font-size:13px}
   background:rgba(0,0,0,.82);color:#eee;font-size:10px;line-height:1.3;
   padding:4px 5px;border-radius:0 0 4px 4px;white-space:normal}
 .img-card:hover .desc{display:block}
+table.sortable th{cursor:pointer;user-select:none}
+table.sortable th:hover{background:#1a2f4a}
+table.sortable th[data-sort-state="asc"]::after{content:" \\25B2";color:#7eb8f7}
+table.sortable th[data-sort-state="desc"]::after{content:" \\25BC";color:#7eb8f7}
+"""
+
+SORT_JS = r"""
+(function(){
+  function txt(c){return (c.innerText||c.textContent||'').trim();}
+  function isEmpty(v){return v==='' || /^null$/i.test(v);}
+  function num(v){var n=Number(v.replace(/[, _]/g,''));return isFinite(n)?n:NaN;}
+  function inferNumeric(rows, idx){
+    var sawAny=false;
+    for (var i=0;i<rows.length;i++){
+      var v=txt(rows[i].cells[idx]); if (isEmpty(v)) continue;
+      if (!isFinite(Number(v.replace(/[, _]/g,'')))) return false;
+      sawAny=true;
+    }
+    return sawAny;
+  }
+  function sortBy(t, idx, dir){
+    var body=t.tBodies[0]||t;
+    var rows=Array.prototype.slice.call(body.rows, 1);  // skip header row
+    var numeric=inferNumeric(rows, idx);
+    rows.sort(function(a,b){
+      var av=txt(a.cells[idx]), bv=txt(b.cells[idx]);
+      var ae=isEmpty(av), be=isEmpty(bv);
+      if (ae&&be) return 0;
+      if (ae) return 1;   // empties always last
+      if (be) return -1;
+      var cmp = numeric
+        ? num(av)-num(bv)
+        : av.localeCompare(bv, undefined, {sensitivity:'base', numeric:true});
+      return dir==='asc' ? cmp : -cmp;
+    });
+    rows.forEach(function(r){body.appendChild(r);});
+  }
+  function init(){
+    document.querySelectorAll('table').forEach(function(t){
+      var first=t.rows[0]; if (!first || t.rows.length<2) return;
+      // Only tables whose first row is all <th> (skip key-value layouts)
+      var cells=Array.prototype.slice.call(first.cells);
+      if (!cells.length) return;
+      if (!cells.every(function(c){return c.tagName==='TH';})) return;
+      t.classList.add('sortable');
+      cells.forEach(function(th, idx){
+        th.addEventListener('click', function(){
+          var prev = t.dataset.sortIdx===String(idx) ? t.dataset.sortDir : '';
+          var dir = prev==='asc' ? 'desc' : 'asc';
+          t.dataset.sortIdx=String(idx); t.dataset.sortDir=dir;
+          cells.forEach(function(c){c.removeAttribute('data-sort-state');});
+          th.dataset.sortState=dir;
+          sortBy(t, idx, dir);
+        });
+      });
+    });
+  }
+  if (document.readyState==='loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+})();
 """
 
 # ddrescue map status characters: (hex_color, display_label)
@@ -74,7 +144,8 @@ def page(title, body, db_name="", nav_extra=""):
     nav = f'<nav>{home}{db_link}{nav_extra}</nav>'
     return f"""<!DOCTYPE html><html><head><meta charset=utf-8>
 <title>{h(title)} &mdash; hdd-recovery</title>
-<style>{CSS}</style></head><body>{nav}<h1>{h(title)}</h1>{body}</body></html>"""
+<style>{CSS}</style></head><body>{nav}<h1>{h(title)}</h1>{body}
+<script>{SORT_JS}</script></body></html>"""
 
 def safe_sql(sql):
     stripped = sql.strip().lstrip(";").strip()
@@ -184,6 +255,201 @@ def page_home(root):
     return page("Recovery Dashboard", body)
 
 
+def pipeline_active_for(db_path):
+    """Return (pid, log_path) of a running image-pipeline.py for this DB, or (None, None)."""
+    try:
+        out = subprocess.run(
+            ["pgrep", "-af", "image-pipeline.py"],
+            capture_output=True, text=True, timeout=5
+        )
+    except Exception:
+        return None, None
+    for line in out.stdout.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        pid, argv = parts
+        if db_path not in argv:
+            continue
+        m = re.search(r"--log\s+(\S+)", argv)
+        log_path = m.group(1) if m else ""
+        return int(pid), log_path
+    return None, None
+
+
+def list_pipeline_logs(export_root, limit=10):
+    if not export_root or not os.path.isdir(export_root):
+        return []
+    pat = os.path.join(export_root, "logs", "pipeline-*.log")
+    paths = sorted(glob.glob(pat), key=os.path.getmtime, reverse=True)
+    return paths[:limit]
+
+
+def panel_pipeline(db_path):
+    """Render the 'Run Pipeline' panel for the DB detail page."""
+    if not PIPELINE_PRESETS:
+        return ('<div class="panel"><h2>Run Pipeline</h2>'
+                '<p class="err">image-pipeline.py module failed to load.</p></div>')
+    enc = urllib.parse.quote(db_path)
+    pid, log_path = pipeline_active_for(db_path)
+
+    # describe each preset
+    boxes = []
+    for name, stages in PIPELINE_PRESETS.items():
+        chain = " &rarr; ".join(stages)
+        boxes.append(
+            f'<label style="display:block;padding:4px 0;cursor:pointer">'
+            f'<input type="checkbox" name="preset" value="{h(name)}" '
+            f'style="margin-right:8px"> '
+            f'<b>{h(name)}</b> '
+            f'<span style="color:var(--sub);font-size:12px">— {chain}</span>'
+            f'</label>'
+        )
+    boxes_html = "".join(boxes)
+
+    # active-run indicator
+    active = ""
+    if pid:
+        log_q = urllib.parse.quote(log_path) if log_path else ""
+        log_link = (f' &nbsp;<a href="/pipeline_log?db={enc}&log={log_q}">view log</a>'
+                    if log_path else "")
+        active = (f'<p><span class="badge running">running</span> '
+                  f'pid {pid}{log_link}</p>')
+
+    # recent logs
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        export_root = conn.execute(
+            "SELECT export_root FROM image_info WHERE id=1").fetchone()
+        conn.close()
+        export_root = export_root[0] if export_root else ""
+    except Exception:
+        export_root = ""
+    recent = list_pipeline_logs(export_root, 5)
+    recent_html = ""
+    if recent:
+        items = []
+        for p in recent:
+            log_q = urllib.parse.quote(p)
+            ts = datetime.fromtimestamp(os.path.getmtime(p)).strftime("%Y-%m-%d %H:%M")
+            items.append(f'<li><a href="/pipeline_log?db={enc}&log={log_q}">'
+                         f'{h(os.path.basename(p))}</a> <span class="count">— {ts}</span></li>')
+        recent_html = ('<p style="margin-top:10px;color:var(--sub);font-size:12px">'
+                       'Recent runs:</p><ul style="margin-left:20px">'
+                       + "".join(items) + "</ul>")
+
+    disabled = "disabled" if pid else ""
+    note = ('<p class="count" style="margin-top:6px">'
+            'Pick one or more presets. Stages run sequentially; the page will '
+            'refresh while the run is alive.</p>')
+
+    return f"""
+    <div class="panel">
+      <h2>Run Pipeline</h2>
+      {active}
+      <form method="post" action="/run_pipeline">
+        <input type="hidden" name="db" value="{h(db_path)}">
+        <div style="display:flex;flex-direction:column;gap:2px">{boxes_html}</div>
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+          <label><input type="checkbox" name="keep_going" value="1"> keep going on failure</label>
+          <button type="submit" {disabled}>Run selected presets</button>
+        </div>
+        {note}
+      </form>
+      {recent_html}
+    </div>
+    """
+
+
+def spawn_pipeline(db_path, presets, keep_going=False):
+    """Spawn image-pipeline.py detached. Returns (log_path, pid) or raises."""
+    if not all(p in PIPELINE_PRESETS for p in presets):
+        raise ValueError("unknown preset(s) in form")
+
+    # merged stage list, dedup preserving order
+    seen = set()
+    stages = []
+    for p in presets:
+        for s in PIPELINE_PRESETS[p]:
+            if s not in seen:
+                seen.add(s)
+                stages.append(s)
+
+    # resolve export_root for log path
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    row = conn.execute("SELECT export_root FROM image_info WHERE id=1").fetchone()
+    conn.close()
+    export_root = row[0] if row else ""
+    if not export_root:
+        raise ValueError("image_info.export_root missing — initialise the DB first")
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log_path = os.path.join(export_root, "logs", f"pipeline-{ts}.log")
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+    cmd = [str(_PIPELINE_PATH), db_path, "--run", "--log", log_path]
+    if keep_going:
+        cmd.append("--keep-going")
+    cmd += stages
+
+    # write a header so the user sees something even before the script writes its own log
+    with open(log_path, "a") as fh:
+        fh.write(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] "
+                 f"spawned: {shlex.join(cmd)}\n")
+
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True
+    )
+    return log_path, proc.pid
+
+
+def page_pipeline_log(db_path, log_path, tail_kb=64):
+    enc = urllib.parse.quote(db_path)
+    if not log_path or not os.path.isfile(log_path):
+        return page("Pipeline Log",
+                    f'<div class="panel"><p class="err">Log not found: {h(log_path)}</p>'
+                    f'<p><a href="/db?db={enc}">&larr; Back to DB</a></p></div>',
+                    db_name=db_path, nav_extra=' &rsaquo; pipeline log')
+
+    # read tail
+    size = os.path.getsize(log_path)
+    with open(log_path, "rb") as fh:
+        if size > tail_kb * 1024:
+            fh.seek(-tail_kb * 1024, os.SEEK_END)
+            fh.readline()  # discard partial line
+        body_text = fh.read().decode("utf-8", errors="replace")
+
+    # alive iff some image-pipeline.py is still writing to this exact log file
+    alive = False
+    try:
+        out = subprocess.run(["pgrep", "-af", "image-pipeline.py"],
+                             capture_output=True, text=True, timeout=5)
+        alive = log_path in out.stdout
+    except Exception:
+        alive = False
+
+    refresh = '<meta http-equiv="refresh" content="3">' if alive else ""
+    badge = ('<span class="badge running">running</span>' if alive
+             else '<span class="badge ok">finished</span>')
+    summary = ""
+    if "Summary:" in body_text:
+        summary = '<p class="count">Final summary at the end of the log.</p>'
+
+    body = f"""
+    {refresh}
+    <div class="panel">
+      <p>{badge} &nbsp; <code>{h(log_path)}</code> &nbsp;
+         (<span class="count">{size:,} bytes</span>)
+         &nbsp; <a href="/db?db={enc}">&larr; Back to DB</a></p>
+      {summary}
+      <pre class="mono" style="background:#0d1117;padding:10px;border-radius:4px;
+                                max-height:70vh;overflow:auto;font-size:12px">{h(body_text)}</pre>
+    </div>
+    """
+    return page("Pipeline Log", body, db_name=db_path, nav_extra=' &rsaquo; pipeline log')
+
+
 def page_db(db_path):
     if not os.path.isfile(db_path):
         return page("Error", '<p class="err">Database not found.</p>')
@@ -260,6 +526,7 @@ def page_db(db_path):
         <a href="/sql?db={enc}" title="Run read-only SELECT queries directly against the analysis database">&#9998; SQL Query</a>{map_link}
       </p>
     </div>
+    {panel_pipeline(db_path)}
     <div class="panel"><h2>Stage Run History</h2>{runs_html}</div>
     """
     return page(name, body, db_name=db_path)
@@ -281,24 +548,56 @@ def page_wallets(db_path, limit=200):
 
 
 def page_pictures(db_path, limit=500):
+    enc = urllib.parse.quote(db_path)
     # Section 1: filesystem-aware scored candidates (from image-detect-pictures.sh)
     try:
-        cols, rows = run_query(db_path, f"""
-            SELECT pc.score, pc.reason, pc.camera_model, pc.taken_at,
-                   pc.width, pc.height,
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        cand_rows = conn.execute(f"""
+            SELECT f.id AS file_id, pc.score, pc.reason,
+                   pc.camera_model, pc.taken_at, pc.width, pc.height,
                    f.name, f.path, f.size_bytes
             FROM   picture_candidates pc
             LEFT JOIN files f ON f.id = pc.file_id
             ORDER  BY pc.score DESC, f.path
-            LIMIT  {limit}""")
-        cand_html = table_html(cols, rows)
-        if not rows:
-            cand_html = '<p class="count">No filesystem-indexed picture candidates. The disk may have no image files in its partition table, or the detect-pictures stage found none.</p>'
+            LIMIT  {limit}""").fetchall()
+        conn.close()
+
+        if not cand_rows:
+            cand_html = ('<p class="count">No filesystem-indexed picture candidates. '
+                         'The disk may have no image files in its partition table, '
+                         'or the detect-pictures stage found none.</p>')
+        else:
+            t = ('<p class="count">' + str(len(cand_rows)) + ' row(s)</p>'
+                 '<div style="overflow-x:auto"><table>'
+                 '<tr><th>Score</th><th>Reason</th><th>Camera</th><th>Taken</th>'
+                 '<th>WxH</th><th>Name</th><th>Path</th><th>Size (B)</th><th>View</th></tr>')
+            for r in cand_rows:
+                fid = r["file_id"]
+                view = ""
+                if fid is not None:
+                    view = (f'<a href="/export_view?db={enc}&file_id={fid}" '
+                            f'target="_blank" title="Extract via icat and view">'
+                            f'&#128247;</a>')
+                wh = ""
+                if r["width"] and r["height"]:
+                    wh = f"{r['width']}x{r['height']}"
+                t += ('<tr>'
+                      f'<td style="text-align:right">{h(r["score"])}</td>'
+                      f'<td>{h(r["reason"])}</td>'
+                      f'<td>{h(r["camera_model"])}</td>'
+                      f'<td style="white-space:nowrap">{h(r["taken_at"])}</td>'
+                      f'<td>{h(wh)}</td>'
+                      f'<td>{h(r["name"])}</td>'
+                      f'<td style="word-break:break-all">{h(r["path"])}</td>'
+                      f'<td style="text-align:right">{(r["size_bytes"] or 0):,}</td>'
+                      f'<td style="text-align:center">{view}</td></tr>')
+            t += '</table></div>'
+            cand_html = t
     except Exception as e:
         cand_html = f'<p class="err">{h(str(e))}</p>'
 
     # Section 2: image artifacts with per-row View link (Option 2) + gallery link (Option 1)
-    enc = urllib.parse.quote(db_path)
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
@@ -328,8 +627,13 @@ def page_pictures(db_path, limit=500):
     body = f"""
     <div class="panel">
       <h2>Filesystem Picture Candidates</h2>
-      <p style="color:var(--sub);font-size:12px;margin-bottom:8px">
+      <p style="color:var(--sub);font-size:12px;margin-bottom:6px">
         Scored by <code>image-detect-pictures.sh</code> from the filesystem index (TSK/fiwalk).
+        Files live inside the disk image; the View column extracts each on demand via icat.
+        &nbsp;&nbsp;
+        <a href="/gallery?db={enc}&mode=fs"
+           style="background:#0f3460;padding:3px 10px;border-radius:3px;color:#7eb8f7"
+           title="Browse filesystem picture candidates as a paginated thumbnail grid">&#128443; Gallery View</a>
       </p>
       {cand_html}
     </div>
@@ -360,13 +664,17 @@ def page_files(db_path, pattern="", limit=500):
     results_html = ""
     if pattern:
         try:
-            sql = f"""SELECT name, path, size, mtime, alloc, fs_type
-                      FROM files WHERE path LIKE ? OR name LIKE ?
-                      ORDER BY size DESC LIMIT {limit}"""
+            sql = f"""SELECT f.name, f.path, f.size_bytes, f.mtime,
+                             f.allocated, f.deleted, fs.fs_type
+                      FROM files f
+                      LEFT JOIN filesystems fs ON fs.partition_id = f.partition_id
+                      WHERE f.path LIKE ? OR f.name LIKE ?
+                      ORDER BY f.size_bytes DESC LIMIT {limit}"""
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
             rows = conn.execute(sql, (pattern, pattern)).fetchmany(limit)
-            cols = ["name", "path", "size", "mtime", "alloc", "fs_type"]
+            cols = ["name", "path", "size_bytes", "mtime",
+                    "allocated", "deleted", "fs_type"]
             conn.close()
             results_html = f'<div class="panel">{table_html(cols, rows)}</div>'
         except Exception as e:
@@ -611,6 +919,52 @@ def page_findings(db_path, tool="", category="", limit=2000):
 
 # ── file serving & image gallery ─────────────────────────────────────────────
 
+def export_file_via_icat(db_path, file_id, root):
+    """Idempotently extract a filesystem-aware file via image-export.sh.
+    Returns (bytes, mime) or (None, err). Skips re-extraction if dest already exists."""
+    try:
+        fid = int(file_id)
+    except (TypeError, ValueError):
+        return None, "invalid file_id"
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        meta = conn.execute(
+            "SELECT f.path, COALESCE(image_info.export_root,'') "
+            "FROM files f, image_info "
+            "WHERE f.id=? AND image_info.id=1", (fid,)
+        ).fetchone()
+        conn.close()
+    except Exception as e:
+        return None, f"db error: {e}"
+    if not meta:
+        return None, f"file id {fid} not found"
+    src_path, export_root = meta
+    if not export_root:
+        return None, "image_info.export_root not set"
+
+    safe_name = os.path.basename(src_path or f"file-{fid}") or f"file-{fid}"
+    dest_dir = os.path.join(export_root, "exports", "files")
+    dest_path = os.path.join(dest_dir, safe_name)
+
+    # If already extracted with non-zero size, just serve it
+    if not (os.path.isfile(dest_path) and os.path.getsize(dest_path) > 0):
+        os.makedirs(dest_dir, exist_ok=True)
+        script = Path(__file__).parent / "image-export.sh"
+        try:
+            r = subprocess.run(
+                [str(script), db_path, "--file-id", str(fid),
+                 "--dest-dir", dest_dir],
+                capture_output=True, text=True, timeout=60
+            )
+        except Exception as e:
+            return None, f"export spawn failed: {e}"
+        if r.returncode != 0:
+            return None, f"image-export.sh rc={r.returncode}: {r.stderr.strip()[:200]}"
+
+    return _safe_file_read(dest_path, root)
+
+
 def _safe_file_read(path, root):
     """Read a file only if it resolves to a path inside root. Returns (bytes, mime) or (None, err)."""
     try:
@@ -625,6 +979,87 @@ def _safe_file_read(path, root):
             return f.read(), mime
     except OSError as e:
         return None, str(e)
+
+
+def page_gallery_fs(db_path, pg=0, per_page=48, all_images=False):
+    """Gallery for filesystem-aware picture candidates. Each thumbnail is fetched
+    via /export_view, which extracts on demand via icat and caches under exports/files/."""
+    enc = urllib.parse.quote(db_path)
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        total = conn.execute("""
+            SELECT COUNT(*) FROM picture_candidates pc
+            JOIN files f ON f.id = pc.file_id
+            WHERE f.size_bytes IS NOT NULL AND f.size_bytes > 0
+        """).fetchone()[0]
+        base_sql = """
+            SELECT f.id AS file_id, f.name, f.path, f.size_bytes,
+                   pc.score, pc.camera_model, pc.taken_at
+            FROM picture_candidates pc
+            JOIN files f ON f.id = pc.file_id
+            WHERE f.size_bytes IS NOT NULL AND f.size_bytes > 0
+            ORDER BY pc.score DESC, f.path
+        """
+        if all_images:
+            rows = conn.execute(base_sql).fetchall()
+        else:
+            offset = pg * per_page
+            rows = conn.execute(base_sql + f" LIMIT {per_page} OFFSET {offset}").fetchall()
+        conn.close()
+    except Exception as e:
+        return page("Image Gallery (filesystem)",
+                    f'<div class="panel err">{h(str(e))}</div>',
+                    db_name=db_path, nav_extra=" &rsaquo; gallery (fs)")
+
+    imgs = ""
+    for r in rows:
+        fid = r["file_id"]
+        sz = r["size_bytes"] or 0
+        name = r["name"] or f"file-{fid}"
+        cam = r["camera_model"] or ""
+        taken = r["taken_at"] or ""
+        meta = " — ".join(filter(None, [name, f"{sz:,} B", f"score {r['score']}", cam, taken]))
+        url = f"/export_view?db={enc}&file_id={fid}"
+        imgs += (
+            f'<a href="{url}" target="_blank" class="img-card" title="{h(meta)}">'
+            f'<img src="{url}" loading="lazy" '
+            f'style="width:150px;height:112px;object-fit:cover;border-radius:4px;'
+            f'border:1px solid #333;background:#111"></a>'
+        )
+
+    btn = 'style="background:#0f3460;padding:3px 12px;border-radius:3px;color:#7eb8f7"'
+    if all_images:
+        header = f'<p class="count">{total:,} candidate(s) — all on one page (extraction is on-demand)</p>'
+        toggle = f'<a href="/gallery?db={enc}&mode=fs" {btn}>&#9660; Paginated view</a>'
+        pager = ""
+    else:
+        total_pages = max(1, (total + per_page - 1) // per_page)
+        offset = pg * per_page
+        pg_base = f"/gallery?db={enc}&mode=fs"
+        prev_link = f'<a href="{pg_base}&page={pg-1}">&larr; Prev</a>' if pg > 0 else ""
+        next_link = f'<a href="{pg_base}&page={pg+1}">Next &rarr;</a>' if (offset + per_page) < total else ""
+        pager = " &nbsp; ".join(filter(None, [prev_link, next_link]))
+        header = f'<p class="count">{total:,} candidate(s) &mdash; page {pg+1} of {total_pages} &nbsp; ({per_page} per page)</p>'
+        all_href = f"/gallery?db={enc}&mode=fs&all=1"
+        toggle = f'<a href="{all_href}" {btn}>&#9651; View all on one page</a>'
+
+    note = ('<p class="count" style="margin-top:6px">'
+            'Each thumbnail is extracted on demand via <code>icat</code> and cached '
+            'under <code>exports/files/</code>. First load may take a moment per image.</p>')
+
+    body = f"""
+    <div class="panel">
+      {header}{note}
+      <p style="margin-top:6px">{toggle}</p>
+    </div>
+    <div class="panel">
+      <div style="display:flex;flex-wrap:wrap;gap:6px">{imgs or '<p class="count">No filesystem candidates with size > 0.</p>'}</div>
+    </div>
+    {"<div class='panel'><p>" + pager + "</p></div>" if pager else ""}
+    """
+    return page("Image Gallery (filesystem)", body, db_name=db_path,
+                nav_extra=" &rsaquo; gallery (fs)")
 
 
 def page_gallery(db_path, root, pg=0, per_page=48, all_images=False, search=""):
@@ -1039,11 +1474,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif p == "/gallery":
                 all_images = self.qsval("all") == "1"
                 search = self.qsval("search")
+                mode = self.qsval("mode") or "carved"
                 try:
                     pg = max(0, int(self.qsval("page", "0") or "0"))
                 except ValueError:
                     pg = 0
-                self.send_html(page_gallery(db, self.root, pg, all_images=all_images, search=search))
+                if mode == "fs":
+                    self.send_html(page_gallery_fs(db, pg, all_images=all_images))
+                else:
+                    self.send_html(page_gallery(db, self.root, pg,
+                                                all_images=all_images, search=search))
+            elif p == "/export_view":
+                file_id = self.qsval("file_id")
+                data, mime_or_err = export_file_via_icat(db, file_id, self.root)
+                if data is None:
+                    self.send_html(page("Error",
+                        f'<p class="err">{h(mime_or_err)}</p>'), 500)
+                else:
+                    self.send_response(200)
+                    self.send_header("Content-Type", mime_or_err)
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "private, max-age=300")
+                    self.end_headers()
+                    self.wfile.write(data)
+                return
+            elif p == "/pipeline_log":
+                log_path = self.qsval("log")
+                self.send_html(page_pipeline_log(db, log_path))
             else:
                 self.send_html(page("404", "<p>Not found.</p>"), 404)
         except Exception as e:
@@ -1071,6 +1528,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_html(page_sql(db, sql=sql, cols=cols, rows=rows))
             except Exception as e:
                 self.send_html(page_sql(db, sql=sql, error=str(e)))
+        elif p == "/run_pipeline":
+            if not db or not os.path.isfile(db):
+                self.send_html(page("Error",
+                    '<p class="err">missing or unknown db</p>'), 400)
+                return
+            presets = params.get("preset", [])
+            if not presets:
+                self.send_html(page("Error",
+                    f'<p class="err">no presets selected</p>'
+                    f'<p><a href="/db?db={urllib.parse.quote(db)}">&larr; back</a></p>'), 400)
+                return
+            existing_pid, existing_log = pipeline_active_for(db)
+            if existing_pid:
+                # already running — redirect to the in-flight log
+                target = (f'/pipeline_log?db={urllib.parse.quote(db)}'
+                          f'&log={urllib.parse.quote(existing_log)}'
+                          if existing_log else f'/db?db={urllib.parse.quote(db)}')
+                self.send_response(302)
+                self.send_header("Location", target)
+                self.end_headers()
+                return
+            keep_going = pval("keep_going") == "1"
+            try:
+                log_path, _pid = spawn_pipeline(db, presets, keep_going=keep_going)
+            except Exception as e:
+                self.send_html(page("Error",
+                    f'<p class="err">spawn failed: {h(str(e))}</p>'
+                    f'<p><a href="/db?db={urllib.parse.quote(db)}">&larr; back</a></p>'), 500)
+                return
+            self.send_response(302)
+            self.send_header("Location",
+                f'/pipeline_log?db={urllib.parse.quote(db)}'
+                f'&log={urllib.parse.quote(log_path)}')
+            self.end_headers()
         else:
             self.send_html(page("405", "<p>Method not allowed.</p>"), 405)
 
