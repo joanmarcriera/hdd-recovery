@@ -12,6 +12,7 @@ A self-contained Docker container for hard-disk image forensics, focused on reco
 - OCR via **Tesseract** with BIP-39 seed-word detection across all recovered images
 - Per-image **SQLite** database tracking every stage: what ran, when, what it found
 - Interactive **TUI** (Python Textual) served at `http://host:7681` — no SSH required
+- Read-only **review UI** served at `http://host:7788` for dashboards, recovered artifacts, galleries, timeline, and SQL queries
 - Go supervisor manages ttyd, auto-restarts on crash, exposes `/health` and `/status` on port `8080`
 - **Ollama** integration: reaches a local Ollama instance via `OLLAMA_HOST`
 
@@ -23,8 +24,8 @@ A self-contained Docker container for hard-disk image forensics, focused on reco
    - `TTYD_PASSWORD` = your password (required)
    - `OLLAMA_HOST` = `http://host-gateway:11434`
 4. Add a host path volume: host `/mnt/BigDisk/CryptoBackup` → container `/mnt/recovery16tb`
-5. Add port forwards: `7681:7681` (TUI) and `8080:8080` (health)
-6. Click **Install**, then open `http://truenas-ip:7681`
+5. Add port forwards: `7681:7681` (TUI), `7788:7788` (review UI), and `8080:8080` (health)
+6. Click **Install**, then open `http://truenas-ip:7681` for the TUI or `http://truenas-ip:7788` for the review UI
 
 ## Quick start — docker run
 
@@ -32,7 +33,7 @@ A self-contained Docker container for hard-disk image forensics, focused on reco
 docker run -d \
   --name hdd-forensics \
   --restart unless-stopped \
-  -p 7681:7681 -p 8080:8080 \
+  -p 7681:7681 -p 7788:7788 -p 8080:8080 \
   -e TTYD_PASSWORD=yourpassword \
   -e OLLAMA_HOST=http://host-gateway:11434 \
   --add-host host-gateway:host-gateway \
@@ -47,6 +48,7 @@ docker run -d \
 | `TTYD_PASSWORD` | **yes** | — | Password for the browser terminal |
 | `TTYD_USER` | no | `admin` | Username for the browser terminal |
 | `TTYD_PORT` | no | `7681` | Browser terminal port |
+| `WEB_PORT` | no | `7788` | Read-only review UI port |
 | `HEALTH_PORT` | no | `8080` | Health/status API port |
 | `OLLAMA_HOST` | no | `http://host-gateway:11434` | Ollama API URL on the Docker host |
 
@@ -55,6 +57,7 @@ docker run -d \
 | Port | Service |
 |------|---------|
 | `7681` | ttyd browser terminal (TUI) |
+| `7788` | Read-only web review UI |
 | `8080` | Supervisor health API (`/health`, `/status`) |
 
 ## Health API

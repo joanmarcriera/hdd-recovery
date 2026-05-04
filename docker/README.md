@@ -114,8 +114,6 @@ bin/image-query.sh <db> findings exiftool
 bin/image-query.sh <db> findings-summary
 ```
 
-<!-- TODO: add thumbnail gallery view of GPS-tagged photos in the web UI -->
-
 ---
 
 ### YARA — Wallet & Key Pattern Matching
@@ -142,9 +140,6 @@ Results are written to:
 ```bash
 bin/image-query.sh <db> findings yara
 ```
-
-<!-- TODO: add Ethereum address regex rule (currently handled by bulk_extractor accts scanner) -->
-<!-- TODO: add rule for Monero wallet seeds (25 words, different wordlist) -->
 
 ---
 
@@ -201,9 +196,6 @@ summary.tsv         — hive processing summary
 bin/image-query.sh <db> findings regripper
 ```
 
-<!-- TODO: parse UserAssist for wallet software execution counts and timestamps -->
-<!-- TODO: extract Shellbags (folder access history) from NTUSER.DAT UsrClass.dat -->
-
 ---
 
 ### rifiuti2 — Windows Recycle Bin Analysis
@@ -229,8 +221,6 @@ all_deleted_files.tsv   — original path + deletion time for every recovered en
 ```bash
 bin/image-query.sh <db> findings rifiuti2
 ```
-
-<!-- TODO: cross-reference deleted file paths with TSK index to find if the file was also seen allocated -->
 
 ---
 
@@ -269,8 +259,6 @@ sqlite3 exports/timeline/<basename>.plaso.sqlite \
 - Default: runs against `exports/recovered/` (fast — minutes to hours)
 - `--full`: runs against raw image (very slow — many hours)
 
-<!-- TODO: expose plaso SQLite file path in TUI detail panel once it exists -->
-
 ---
 
 ## TrueNAS SCALE — Custom App Setup
@@ -308,18 +296,19 @@ Add one volume mount under **Storage**.
 
 ### 4. Port Forwarding
 
-Add two port entries under **Port Forwarding**.
+Add three port entries under **Port Forwarding**.
 
 | Container Port | Host Port | Protocol | Purpose |
 |---------------|-----------|----------|---------|
 | `7681` | `7681` | TCP | Browser terminal (ttyd) |
+| `7788` | `7788` | TCP | Read-only web review UI |
 | `8080` | `9999` | TCP | Health / status API |
 
 > **Note on port 8080:** TrueNAS itself often binds 8080. Map the container's `8080` to a free host port such as `9999`. Set `HEALTH_PORT=9999` in Environment Variables if you change this. The TrueNAS health probe must point at whichever host port you choose.
 
 ### 5. GPU
 
-Do **not** enable GPU passthrough. Ollama runs on the TrueNAS host, not inside this container.
+GPU passthrough is optional for ordinary analysis, but required for hashcat cracking stages. If you plan to run wallet/KeePass cracking, start the container with NVIDIA runtime access (`--gpus all` or the TrueNAS equivalent) and verify `hashcat -I` inside the container. Ollama can still run on the TrueNAS host via `OLLAMA_HOST`.
 
 ### 6. Restart Policy
 
@@ -331,6 +320,12 @@ Open the browser terminal:
 
 ```
 http://<truenas-ip>:7681
+```
+
+Open the read-only review UI:
+
+```
+http://<truenas-ip>:7788
 ```
 
 Log in with username `admin` (or whatever you set `TTYD_USER` to) and the `TTYD_PASSWORD` you configured. The terminal starts the TUI by default; change `TTYD_CMD` to `bash` if you want a plain shell.
@@ -373,6 +368,7 @@ The compose file expects the `.env` file to live at `docker/.env`. Run all `dock
 | `TTYD_USER` | `admin` | No | Username shown in the browser auth dialog. |
 | `TTYD_PORT` | `7681` | No | Port ttyd listens on inside the container. Change only if you have an internal conflict. |
 | `TTYD_CMD` | `cd /root/hdd-recovery && exec bin/tui.sh` | No | Shell command each terminal session runs. Set to `bash` for a plain shell. |
+| `WEB_PORT` | `7788` | No | Port the read-only web review UI listens on inside the container. |
 | `HEALTH_PORT` | `8080` | No | Port the supervisor's health/status HTTP server listens on inside the container. |
 | `OLLAMA_HOST` | `http://host-gateway:11434` | No | Base URL of the Ollama API. Must be reachable from inside the container. |
 
@@ -520,7 +516,7 @@ The analysis scripts derive all paths from the image file location. The SQLite d
 ## Troubleshooting
 
 **Container not starting**
-- Confirm GPU passthrough is disabled in the Custom App config.
+- If GPU passthrough is enabled, confirm the NVIDIA runtime is available to Docker/TrueNAS; otherwise leave GPU disabled until cracking stages are needed.
 - Confirm Restart Policy is set to `Unless Stopped`.
 - Check logs: `docker logs hdd-forensics`
 - The most common cause is a missing `TTYD_PASSWORD` — the supervisor calls `log.Fatal` immediately if it is unset.

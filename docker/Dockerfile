@@ -19,7 +19,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential libdb-dev python3-dev libssl-dev libffi-dev \
     autoconf automake libtool pkg-config \
     # Disk & filesystem
-    ddrescue parted gdisk util-linux btrfs-progs xfsprogs dosfstools \
+    ddrescue parted gdisk util-linux fdisk btrfs-progs xfsprogs dosfstools \
+    fatcat tcllib \
     # Forensics
     sleuthkit testdisk bulk-extractor foremost scalpel \
     extundelete ext4magic recoverjpeg magicrescue binwalk dc3dd \
@@ -66,16 +67,29 @@ RUN git clone https://github.com/3rdIteration/btcrecover.git /opt/btcrecover \
     && git checkout "$BTCRECOVER_REF" \
     && python3 -m pip install --break-system-packages -r requirements.txt \
     && chmod +x btcrecover.py seedrecover.py \
-    && ln -sf /opt/btcrecover/btcrecover.py  /usr/local/bin/btcrecover.py \
-    && ln -sf /opt/btcrecover/seedrecover.py /usr/local/bin/seedrecover.py \
-    && python3 /opt/btcrecover/btcrecover.py --help >/dev/null \
-    && python3 /opt/btcrecover/seedrecover.py --help >/dev/null
+    && printf '%s\n' '#!/usr/bin/env bash' \
+      'exec python3 /opt/btcrecover/btcrecover.py "$@"' \
+      > /usr/local/bin/btcrecover.py \
+    && printf '%s\n' '#!/usr/bin/env bash' \
+      'exec python3 /opt/btcrecover/seedrecover.py "$@"' \
+      > /usr/local/bin/seedrecover.py \
+    && chmod +x /usr/local/bin/btcrecover.py /usr/local/bin/seedrecover.py \
+    && btcrecover.py --help >/dev/null \
+    && seedrecover.py --help >/dev/null
 
 # ── Volatility3 ──────────────────────────────────────────────────────────────
 RUN python3 -m pip install --break-system-packages volatility3
 
 # ── Photo perceptual hashing ─────────────────────────────────────────────────
 RUN python3 -m pip install --break-system-packages imagehash
+
+# ── xfs_undelete (Tcl script, requires tcllib from apt) ─────────────────────
+ARG XFS_UNDELETE_REF=43fec30088d4bdc608a43a1aa81f2525dd260d17
+RUN git clone https://github.com/ianka/xfs_undelete.git /opt/xfs_undelete \
+    && cd /opt/xfs_undelete \
+    && git checkout "$XFS_UNDELETE_REF" \
+    && chmod +x xfs_undelete \
+    && ln -sf /opt/xfs_undelete/xfs_undelete /usr/local/bin/xfs_undelete
 
 # ── keepass4brute for KDBX 4 / Argon2 CPU-only fallback ─────────────────────
 ARG KEEPASS4BRUTE_COMMIT=6e0b1a0e11daaa674653c5f15f8d06ba2164c335
@@ -150,7 +164,8 @@ WORKDIR /root/hdd-recovery
 
 # ── Ports ─────────────────────────────────────────────────────────────────────
 # 7681  ttyd — browser terminal
+# 7788  read-only web UI
 # 8080  supervisor health/status API
-EXPOSE 7681 8080
+EXPOSE 7681 7788 8080
 
 ENTRYPOINT ["/usr/local/bin/hdd-supervisor"]
