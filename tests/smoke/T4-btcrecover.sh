@@ -16,6 +16,11 @@ Expected verification SQL:
   SELECT source_method,key_type,key_value FROM wallet_keys WHERE source_method='btcrecover';
 EOF
 
+command -v seedrecover.py >/dev/null
+seedrecover.py --help >/dev/null
+command -v btcrecover.py >/dev/null
+btcrecover.py --help >/dev/null
+
 rm -rf "$WORK_DIR"
 mkdir -p "$EXPORT_ROOT/logs" "$EXPORT_ROOT/hits" "$EXPORT_ROOT/state/btcrecover"
 truncate -s 16M "$IMG"

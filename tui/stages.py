@@ -921,7 +921,7 @@ STAGES: list[StageDef] = [
         ),
         script="image-tag-photos.py",
         args_template=["{db}"],   # real args built by TagPhotosScreen config modal
-        scan_run_key="tag-photos",
+        scan_run_key="llava-tag-photos",
         pgrep_pattern="image-tag-photos",
         runtime_hint="1 – 4 h",
         rerunnable=True,
