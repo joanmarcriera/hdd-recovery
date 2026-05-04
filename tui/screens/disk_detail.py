@@ -120,6 +120,7 @@ class DiskDetailScreen(Screen):
         super().__init__()
         self.disk = disk
         self._statuses: dict[str, StageStatus] = {}
+        self._first_load = True
         # Coverage history for ETA: list of (monotonic_time, coverage_pct)
         self._coverage_history: list[tuple[float, float]] = []
         # Cached SMART output (fetch_time, text)
@@ -193,11 +194,16 @@ class DiskDetailScreen(Screen):
             name_text = Text(stage.name)
             if stage.is_optional:
                 name_text.append(" (opt)", style="dim italic")
+            if st == StageStatus.RUNNING:
+                name_text.stylize("bold")
             note = get_stage_note(self.disk, stage, st)
             note_text = Text(note, style=_note_style(st)) if note else Text("")
             table.add_row(num, name_text, icon, note_text, Text(stage.runtime_hint, style="dim"), key=stage.key)
 
-        if prev_row < table.row_count:
+        if self._first_load:
+            self._first_load = False
+            self._jump_to_next()
+        elif prev_row < table.row_count:
             table.move_cursor(row=prev_row)
         else:
             self._jump_to_next()

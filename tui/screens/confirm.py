@@ -112,7 +112,12 @@ class ConfirmScreen(ModalScreen[bool]):
                 runs = disk.all_runs(stage.scan_run_key)
                 if runs:
                     latest = runs[-1]
-                    ended = latest.ended_at or "still running"
+                    if latest.ended_at:
+                        ended = latest.ended_at
+                    elif latest.status == "running":
+                        ended = "in progress"
+                    else:
+                        ended = "no end recorded"
                     note = f"  note: {escape(latest.notes)}" if latest.notes else ""
                     prev_text = (
                         f"Previous run: [{'green' if latest.status == 'ok' else 'yellow'}]"

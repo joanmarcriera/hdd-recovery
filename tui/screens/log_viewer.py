@@ -82,16 +82,27 @@ class LogViewerScreen(Screen):
 
     @work(thread=True)
     def _tail_log(self, log: RichLog) -> None:
+        import time as _time
         path = Path(self.log_path)
         if not path.exists():
             self.app.call_from_thread(log.write, f"[red]Log file not found: {escape(str(self.log_path))}[/red]")
             return
         try:
             text = path.read_text(errors="replace")
+            stat = path.stat()
+            age_s = _time.time() - stat.st_mtime
+            if age_s < 60:
+                age = f"{int(age_s)}s ago"
+            elif age_s < 3600:
+                age = f"{int(age_s/60)}m ago"
+            else:
+                age = f"{int(age_s/3600)}h {int((age_s%3600)/60)}m ago"
+            size = (f"{stat.st_size/1_048_576:.1f} MB" if stat.st_size >= 1_048_576
+                    else f"{stat.st_size/1024:.1f} KB")
             self.app.call_from_thread(log.write, text)
             self.app.call_from_thread(
                 self.query_one("#status-bar", Label).update,
-                f"[dim]{escape(str(self.log_path))}  —  read-only  (B/Q to go back)[/dim]",
+                f"[dim]{escape(str(self.log_path))}  —  {size}  modified {age}  (B/Q to go back)[/dim]",
             )
         except Exception as exc:
             self.app.call_from_thread(log.write, f"[red]Error reading log: {escape(str(exc))}[/red]")
