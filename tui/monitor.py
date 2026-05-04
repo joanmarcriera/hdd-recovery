@@ -58,31 +58,66 @@ class _CpuSampler:
 
 
 class _DiskSampler:
-    def __init__(self) -> None:
-        self._prev: Optional[tuple[int, int, float]] = None  # (sectors_r, sectors_w, t)
+    """Track read/write MB/s for multiple named block devices."""
 
-    def sample(self) -> tuple[float, float]:
-        """Return (read_MBs, write_MBs) for _DISK_DEV since last call."""
+    def __init__(self) -> None:
+        # {dev_name: (sectors_read, sectors_write, monotonic_time)}
+        self._prev: dict[str, tuple[int, int, float]] = {}
+
+    def _parse_diskstats(self) -> dict[str, tuple[int, int]]:
+        """Return {dev_name: (sectors_read, sectors_written)} from /proc/diskstats."""
+        result: dict[str, tuple[int, int]] = {}
         try:
             for line in Path("/proc/diskstats").read_text().splitlines():
                 parts = line.split()
-                if len(parts) >= 14 and parts[2] == _DISK_DEV:
-                    sr = int(parts[5])   # sectors read
-                    sw = int(parts[9])   # sectors written
-                    now = time.monotonic()
-                    if self._prev:
-                        pr, pw, pt = self._prev
-                        dt = now - pt
-                        if dt > 0:
-                            read_mbs  = (sr - pr) * 512 / dt / 1_048_576
-                            write_mbs = (sw - pw) * 512 / dt / 1_048_576
-                            self._prev = (sr, sw, now)
-                            return (max(0.0, read_mbs), max(0.0, write_mbs))
-                    self._prev = (sr, sw, now)
-                    return (0.0, 0.0)
+                if len(parts) >= 10:
+                    name = parts[2]
+                    result[name] = (int(parts[5]), int(parts[9]))
         except Exception:
             pass
-        return (0.0, 0.0)
+        return result
+
+    def sample(self, devices: list[str]) -> dict[str, tuple[float, float]]:
+        """Return {dev: (read_MBs, write_MBs)} for each requested device."""
+        now = time.monotonic()
+        stats = self._parse_diskstats()
+        result: dict[str, tuple[float, float]] = {}
+        for dev in devices:
+            if dev not in stats:
+                result[dev] = (0.0, 0.0)
+                continue
+            sr, sw = stats[dev]
+            if dev in self._prev:
+                pr, pw, pt = self._prev[dev]
+                dt = now - pt
+                if dt > 0:
+                    r = max(0.0, (sr - pr) * 512 / dt / 1_048_576)
+                    w = max(0.0, (sw - pw) * 512 / dt / 1_048_576)
+                    result[dev] = (r, w)
+                else:
+                    result[dev] = (0.0, 0.0)
+            else:
+                result[dev] = (0.0, 0.0)
+            self._prev[dev] = (sr, sw, now)
+        return result
+
+    def active_loop_devices(self, min_mbs: float = 0.1) -> list[str]:
+        """Return loop device names with recent I/O above min_mbs (read or write)."""
+        now = time.monotonic()
+        stats = self._parse_diskstats()
+        active = []
+        for name, (sr, sw) in stats.items():
+            if not name.startswith("loop"):
+                continue
+            if name in self._prev:
+                pr, pw, pt = self._prev[name]
+                dt = now - pt
+                if dt > 0:
+                    r = (sr - pr) * 512 / dt / 1_048_576
+                    w = (sw - pw) * 512 / dt / 1_048_576
+                    if r >= min_mbs or w >= min_mbs:
+                        active.append(name)
+        return sorted(active)
 
 
 def _sparkline(history: deque[float], max_val: float = 100.0) -> str:
@@ -242,19 +277,30 @@ class SystemBar(Widget):
         yield self._label
 
     def on_mount(self) -> None:
-        self._cpu.sample()   # prime samplers so first delta is meaningful
-        self._disk.sample()
-        self._tick()                        # render immediately, don't wait 2s
-        self.set_interval(2, self._tick)    # then keep refreshing
+        self._cpu.sample()              # prime CPU sampler so first delta is meaningful
+        self._disk.sample([_DISK_DEV])  # prime disk sampler
+        self._tick()
+        self.set_interval(2, self._tick)
 
     @work(thread=True)
     def _tick(self) -> None:
         try:
             cpu_pct = self._cpu.sample()
-            read_mbs, write_mbs = self._disk.sample()
+
+            # Always sample the destination disk; add source dev and active loops
+            devs = [_DISK_DEV]
+            src = (self.disk.source_dev or "").lstrip("/dev/") if self.disk else ""
+            if src and src != _DISK_DEV:
+                devs.append(src)
+            loops = self._disk.active_loop_devices()
+            for lp in loops:
+                if lp not in devs:
+                    devs.append(lp)
+
+            io = self._disk.sample(devs)
             proc_info = _running_proc_info(self.disk)
             mem_info  = _mem_summary()
-            self.app.call_from_thread(self._redraw, cpu_pct, read_mbs, write_mbs, proc_info, mem_info)
+            self.app.call_from_thread(self._redraw, cpu_pct, io, devs, src, proc_info, mem_info)
         except Exception as exc:
             self.app.call_from_thread(
                 self._label.update, f"[dim]monitor error: {exc}[/dim]"
@@ -263,8 +309,9 @@ class SystemBar(Widget):
     def _redraw(
         self,
         cpu_pct: float,
-        read_mbs: float,
-        write_mbs: float,
+        io: dict[str, tuple[float, float]],
+        devs: list[str],
+        src_dev: str,
         proc_info: Optional[str],
         mem_info: str = "",
     ) -> None:
@@ -273,9 +320,25 @@ class SystemBar(Widget):
         style = _cpu_color(cpu_pct)
         spark = _sparkline(self._cpu.history)
 
+        # Build per-device I/O segments.  Destination always first; label it.
+        io_parts: list[str] = []
+        for dev in devs:
+            r, w = io.get(dev, (0.0, 0.0))
+            if dev == _DISK_DEV:
+                label = f"[dim]{dev}[/dim]"
+            elif dev == src_dev:
+                # Source disk during imaging: highlight reads
+                r_style = "bold cyan" if r > 5 else "cyan"
+                label = f"[{r_style}]{dev}[/{r_style}]"
+            else:
+                # Loop device (image read during analysis)
+                r_style = "cyan" if r > 5 else "dim"
+                label = f"[{r_style}]{dev}[/{r_style}]"
+            io_parts.append(f"{label} ↓{r:5.1f} ↑{w:4.1f}")
+
         parts = [
             f"CPU [{style}]{spark} {cpu_pct:4.0f}%[/{style}]",
-            f"[dim]{_DISK_DEV}[/dim] ↓{read_mbs:5.1f} ↑{write_mbs:5.1f} MB/s",
+            "  ".join(io_parts),
         ]
         if mem_info:
             parts.append(mem_info)
