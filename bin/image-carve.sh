@@ -72,8 +72,15 @@ run_one() {
       need_cmd magicrescue
       local recipes_dir="/usr/share/magicrescue/recipes"
       local recipe_args=()
-      # wallet + pictures + documents — skip noise (elf, empathy, mbox, perl)
-      for recipe in jpeg-jfif jpeg-exif png sqlite zip rar gzip msoffice mp3-id3v1 mp3-id3v2 avi; do
+      local default_recipes=(jpeg-jfif jpeg-exif png sqlite zip rar gzip msoffice)
+      local extra_recipes=()
+      if [[ -n "${MAGICRESCUE_EXTRA_RECIPES:-}" ]]; then
+        # Optional space-separated recipe names, e.g. "mp3-id3v1 mp3-id3v2 avi".
+        read -r -a extra_recipes <<< "$MAGICRESCUE_EXTRA_RECIPES"
+      fi
+      # wallet + pictures + documents. Audio/video recipes are opt-in because
+      # mp3-id3v1 can produce huge false-positive streams on raw disk images.
+      for recipe in "${default_recipes[@]}" "${extra_recipes[@]}"; do
         [[ -f "$recipes_dir/$recipe" ]] && recipe_args+=(-r "$recipes_dir/$recipe")
       done
       if [[ ${#recipe_args[@]} -eq 0 ]]; then

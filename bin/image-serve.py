@@ -138,13 +138,13 @@ def badge(status):
            "running": "running", "error": "error"}.get(str(status).lower(), "pending")
     return f'<span class="badge {cls}">{h(status)}</span>'
 
-def page(title, body, db_name="", nav_extra=""):
+def page(title, body, db_name="", nav_extra="", head_extra=""):
     home = '<a href="/">&#8962; home</a>'
     db_link = f' &rsaquo; <a href="/db?db={urllib.parse.quote(db_name)}">{h(Path(db_name).name)}</a>' if db_name else ""
     nav = f'<nav>{home}{db_link}{nav_extra}</nav>'
     return f"""<!DOCTYPE html><html><head><meta charset=utf-8>
 <title>{h(title)} &mdash; hdd-recovery</title>
-<style>{CSS}</style></head><body>{nav}<h1>{h(title)}</h1>{body}
+<style>{CSS}</style>{head_extra}</head><body>{nav}<h1>{h(title)}</h1>{body}
 <script>{SORT_JS}</script></body></html>"""
 
 def safe_sql(sql):
@@ -158,13 +158,13 @@ def safe_sql(sql):
             raise ValueError(f"Disallowed keyword: {bad}")
     return stripped
 
-def run_query(db_path, sql, limit=5000):
+def run_query(db_path, sql, params=(), limit=5000):
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     try:
-        rows = conn.execute(sql).fetchmany(limit)
-        cols = [d[0] for d in conn.execute(sql).description] if rows else \
-               [d[0] for d in conn.execute(f"SELECT * FROM ({sql}) LIMIT 0").description]
+        cur = conn.execute(sql, params)
+        rows = cur.fetchmany(limit)
+        cols = [d[0] for d in cur.description or []]
         return cols, rows
     finally:
         conn.close()
@@ -177,6 +177,10 @@ def query_scalar(db_path, sql, default=None):
         return row[0] if row else default
     except Exception:
         return default
+
+
+def db_export_root(db_path):
+    return query_scalar(db_path, "SELECT export_root FROM image_info WHERE id=1", "") or ""
 
 def table_html(cols, rows, max_cell=300):
     if not rows:
@@ -315,7 +319,23 @@ def page_home(root):
           <td style="text-align:center">{map_cell}</td>
         </tr>"""
 
-    body = f"""{mem_panel()}<div class="panel">
+    # Active pipeline banner
+    pipeline_banner = ""
+    for db_path in dbs:
+        pid, log_path = pipeline_active_for(db_path)
+        if pid:
+            enc2 = urllib.parse.quote(db_path)
+            log_q = urllib.parse.quote(log_path) if log_path else ""
+            log_link = (f' &nbsp; <a href="/pipeline_log?db={enc2}&log={log_q}">view log</a>'
+                        if log_path else "")
+            pipeline_banner += (
+                f'<div class="panel" style="border-left:4px solid #22aa44;padding:8px 14px">'
+                f'<span class="badge running">running</span> &nbsp; '
+                f'<b>{h(Path(db_path).stem)}</b> &nbsp; pid {pid}{log_link}'
+                f'</div>'
+            )
+
+    body = f"""{mem_panel()}{pipeline_banner}<div class="panel">
       <p class="count">{len(dbs)} database(s) found under <code>{h(root)}</code></p>
       <table style="margin-top:10px">
         <tr><th>Database</th><th>Image</th><th>DB Size</th>
@@ -323,7 +343,8 @@ def page_home(root):
         {rows_html}
       </table>
     </div>"""
-    return page("Recovery Dashboard", body)
+    head_extra = '<meta http-equiv="refresh" content="20">' if pipeline_banner else ""
+    return page("Recovery Dashboard", body, head_extra=head_extra)
 
 
 def pipeline_active_for(db_path):
@@ -343,7 +364,11 @@ def pipeline_active_for(db_path):
         if db_path not in argv:
             continue
         m = re.search(r"--log\s+(\S+)", argv)
-        log_path = m.group(1) if m else ""
+        if m:
+            log_path = m.group(1)
+        else:
+            recent_logs = list_pipeline_logs(db_export_root(db_path), 1)
+            log_path = recent_logs[0] if recent_logs else ""
         return int(pid), log_path
     return None, None
 
@@ -354,6 +379,22 @@ def list_pipeline_logs(export_root, limit=10):
     pat = os.path.join(export_root, "logs", "pipeline-*.log")
     paths = sorted(glob.glob(pat), key=os.path.getmtime, reverse=True)
     return paths[:limit]
+
+
+def _db_log_path(db_path, log_path):
+    """Resolve a log path only if it belongs to this DB's export_root/logs."""
+    if not log_path:
+        return "", "Log path is missing."
+    export_root = db_export_root(db_path)
+    if not export_root:
+        return "", "image_info.export_root missing for this database."
+    logs_root = os.path.realpath(os.path.join(export_root, "logs"))
+    abs_path = os.path.realpath(log_path)
+    if not abs_path.startswith(logs_root + os.sep):
+        return "", "Forbidden: log path is outside this image's logs directory."
+    if not os.path.isfile(abs_path):
+        return "", f"Log not found: {log_path}"
+    return abs_path, ""
 
 
 def panel_pipeline(db_path):
@@ -388,14 +429,7 @@ def panel_pipeline(db_path):
                   f'pid {pid}{log_link}</p>')
 
     # recent logs
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        export_root = conn.execute(
-            "SELECT export_root FROM image_info WHERE id=1").fetchone()
-        conn.close()
-        export_root = export_root[0] if export_root else ""
-    except Exception:
-        export_root = ""
+    export_root = db_export_root(db_path)
     recent = list_pipeline_logs(export_root, 5)
     recent_html = ""
     if recent:
@@ -422,6 +456,7 @@ def panel_pipeline(db_path):
         <input type="hidden" name="db" value="{h(db_path)}">
         <div style="display:flex;flex-direction:column;gap:2px">{boxes_html}</div>
         <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+          <label><input type="checkbox" name="skip_done" value="1" checked> skip stages already ok</label>
           <label><input type="checkbox" name="keep_going" value="1"> keep going on failure</label>
           <button type="submit" {disabled}>Run selected presets</button>
         </div>
@@ -432,7 +467,7 @@ def panel_pipeline(db_path):
     """
 
 
-def spawn_pipeline(db_path, presets, keep_going=False):
+def spawn_pipeline(db_path, presets, keep_going=False, skip_done=False):
     """Spawn image-pipeline.py detached. Returns (log_path, pid) or raises."""
     if not all(p in PIPELINE_PRESETS for p in presets):
         raise ValueError("unknown preset(s) in form")
@@ -447,10 +482,7 @@ def spawn_pipeline(db_path, presets, keep_going=False):
                 stages.append(s)
 
     # resolve export_root for log path
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    row = conn.execute("SELECT export_root FROM image_info WHERE id=1").fetchone()
-    conn.close()
-    export_root = row[0] if row else ""
+    export_root = db_export_root(db_path)
     if not export_root:
         raise ValueError("image_info.export_root missing — initialise the DB first")
 
@@ -461,6 +493,8 @@ def spawn_pipeline(db_path, presets, keep_going=False):
     cmd = [str(_PIPELINE_PATH), db_path, "--run", "--log", log_path]
     if keep_going:
         cmd.append("--keep-going")
+    if skip_done:
+        cmd.append("--skip-done")
     cmd += stages
 
     # write a header so the user sees something even before the script writes its own log
@@ -477,11 +511,13 @@ def spawn_pipeline(db_path, presets, keep_going=False):
 
 def page_pipeline_log(db_path, log_path, tail_kb=64):
     enc = urllib.parse.quote(db_path)
-    if not log_path or not os.path.isfile(log_path):
+    safe_log_path, err = _db_log_path(db_path, log_path)
+    if err:
         return page("Pipeline Log",
-                    f'<div class="panel"><p class="err">Log not found: {h(log_path)}</p>'
+                    f'<div class="panel"><p class="err">{h(err)}</p>'
                     f'<p><a href="/db?db={enc}">&larr; Back to DB</a></p></div>',
                     db_name=db_path, nav_extra=' &rsaquo; pipeline log')
+    log_path = safe_log_path
 
     # read tail
     size = os.path.getsize(log_path)
@@ -496,7 +532,7 @@ def page_pipeline_log(db_path, log_path, tail_kb=64):
     try:
         out = subprocess.run(["pgrep", "-af", "image-pipeline.py"],
                              capture_output=True, text=True, timeout=5)
-        alive = log_path in out.stdout
+        alive = log_path in out.stdout or os.path.realpath(log_path) in out.stdout
     except Exception:
         alive = False
 
@@ -508,7 +544,6 @@ def page_pipeline_log(db_path, log_path, tail_kb=64):
         summary = '<p class="count">Final summary at the end of the log.</p>'
 
     body = f"""
-    {refresh}
     <div class="panel">
       <p>{badge} &nbsp; <code>{h(log_path)}</code> &nbsp;
          (<span class="count">{size:,} bytes</span>)
@@ -518,7 +553,41 @@ def page_pipeline_log(db_path, log_path, tail_kb=64):
                                 max-height:70vh;overflow:auto;font-size:12px">{h(body_text)}</pre>
     </div>
     """
-    return page("Pipeline Log", body, db_name=db_path, nav_extra=' &rsaquo; pipeline log')
+    return page("Pipeline Log", body, db_name=db_path,
+                nav_extra=' &rsaquo; pipeline log', head_extra=refresh)
+
+
+def _runs_table_html(db_path, runs):
+    """Scan-runs table with colour-coded status badges and log links."""
+    if not runs:
+        return '<p class="count">No stages run yet.</p>'
+    enc = urllib.parse.quote(db_path)
+    buf = (f'<p class="count">{len(runs)} run(s)</p>'
+           '<div style="overflow-x:auto"><table>'
+           '<tr><th>Stage</th><th>Status</th><th>Started</th>'
+           '<th>Ended</th><th>Log</th><th>Output</th></tr>')
+    for r in runs:
+        stage_name = h(r["stage"] or "")
+        status_cell = badge(r["status"] or "")
+        started = h((r["started_at"] or "")[:19])
+        ended = h((r["ended_at"] or "—")[:19])
+        log_cell = ""
+        if r["log_path"]:
+            lq = urllib.parse.quote(r["log_path"])
+            log_cell = (f'<a href="/pipeline_log?db={enc}&log={lq}" '
+                        f'title="{h(r["log_path"])}">&#128196;</a>')
+        out_cell = ""
+        if r["output_dir"]:
+            out_cell = (f'<span title="{h(r["output_dir"])}" '
+                        f'style="font-size:11px;color:var(--sub)">'
+                        f'{h(Path(r["output_dir"]).name)}</span>')
+        buf += (f'<tr><td>{stage_name}</td><td>{status_cell}</td>'
+                f'<td style="white-space:nowrap">{started}</td>'
+                f'<td style="white-space:nowrap">{ended}</td>'
+                f'<td style="text-align:center">{log_cell}</td>'
+                f'<td>{out_cell}</td></tr>')
+    buf += '</table></div>'
+    return buf
 
 
 def page_db(db_path):
@@ -526,6 +595,23 @@ def page_db(db_path):
         return page("Error", '<p class="err">Database not found.</p>')
 
     name = Path(db_path).name
+
+    # DB file metadata
+    try:
+        db_stat = os.stat(db_path)
+        db_size_mb = db_stat.st_size / 1_048_576
+        import time as _time
+        db_age_s = _time.time() - db_stat.st_mtime
+        if db_age_s < 60:
+            db_age = f"{int(db_age_s)}s ago"
+        elif db_age_s < 3600:
+            db_age = f"{int(db_age_s/60)}m ago"
+        else:
+            db_age = f"{int(db_age_s/3600)}h {int((db_age_s%3600)/60)}m ago"
+        db_meta = (f'<p class="count" style="margin-bottom:6px">'
+                   f'SQLite {db_size_mb:.1f} MB &nbsp;·&nbsp; last modified {db_age}</p>')
+    except Exception:
+        db_meta = ""
 
     # image_info
     try:
@@ -545,11 +631,16 @@ def page_db(db_path):
     else:
         info_html = "<p>image_info table not found.</p>"
 
-    # scan_runs summary
+    # scan_runs — custom colour-coded table
     try:
-        cols, runs = run_query(db_path,
-            "SELECT stage, status, started_at, ended_at, log_path, output_dir FROM scan_runs ORDER BY started_at")
-        runs_html = table_html(cols, runs)
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        runs = conn.execute(
+            "SELECT stage, status, started_at, ended_at, log_path, output_dir "
+            "FROM scan_runs ORDER BY id"
+        ).fetchall()
+        conn.close()
+        runs_html = _runs_table_html(db_path, runs)
     except Exception as e:
         runs_html = f'<p class="err">{h(str(e))}</p>'
 
@@ -588,8 +679,12 @@ def page_db(db_path):
     map_link = (f' &nbsp; <a href="/mapview?db={enc}" title="Visual block map of ddrescue imaging coverage">&#128209; ddrescue Map</a>'
                 if map_path and os.path.isfile(map_path) else "")
 
+    # Auto-refresh if a pipeline is active for this DB
+    pid, _ = pipeline_active_for(db_path)
+    head_extra = '<meta http-equiv="refresh" content="15">' if pid else ""
+
     body = f"""
-    <div class="panel"><h2>Image Info</h2>{info_html}</div>
+    <div class="panel"><h2>Image Info</h2>{db_meta}{info_html}</div>
     <div class="panel"><h2>Quick Links</h2>
       <p>{counts_html}</p>
       <p style="margin-top:10px">
@@ -600,7 +695,7 @@ def page_db(db_path):
     {panel_pipeline(db_path)}
     <div class="panel"><h2>Stage Run History</h2>{runs_html}</div>
     """
-    return page(name, body, db_name=db_path)
+    return page(name, body, db_name=db_path, head_extra=head_extra)
 
 
 def page_wallets(db_path, limit=200):
@@ -757,15 +852,22 @@ def page_files(db_path, pattern="", limit=500):
 def page_artifacts(db_path, method="", limit=1000):
     enc = urllib.parse.quote(db_path)
     try:
-        method_filter = f"WHERE method = '{method}'" if method else ""
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            f"""SELECT method, mime_type, size_bytes, relative_path, full_path,
-                       sha256, created_at
-                FROM recovered_artifacts {method_filter}
-                ORDER BY created_at DESC LIMIT {limit}"""
-        ).fetchall()
+        if method:
+            rows = conn.execute(
+                "SELECT method, mime_type, size_bytes, relative_path, full_path, "
+                "sha256, created_at FROM recovered_artifacts WHERE method = ? "
+                "ORDER BY created_at DESC LIMIT ?",
+                (method, limit)
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT method, mime_type, size_bytes, relative_path, full_path, "
+                "sha256, created_at FROM recovered_artifacts "
+                "ORDER BY created_at DESC LIMIT ?",
+                (limit,)
+            ).fetchall()
         methods = [r[0] for r in conn.execute(
             "SELECT DISTINCT method FROM recovered_artifacts ORDER BY method").fetchall()]
         conn.close()
@@ -912,15 +1014,19 @@ def page_bulk_hits(db_path, scope="", feature="", limit=2000):
 
     try:
         where_parts = []
+        params = []
         if scope:
-            where_parts.append(f"source_scope = '{scope.replace(chr(39), chr(39)*2)}'")
+            where_parts.append("source_scope = ?")
+            params.append(scope)
         if feature:
-            where_parts.append(f"feature_file = '{feature.replace(chr(39), chr(39)*2)}'")
+            where_parts.append("feature_file = ?")
+            params.append(feature)
         where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
         cols, rows = run_query(db_path,
             f"SELECT source_scope, feature_file, value, context, offset_ref "
             f"FROM bulk_extractor_hits {where} "
-            f"ORDER BY source_scope, feature_file LIMIT {limit}")
+            f"ORDER BY source_scope, feature_file LIMIT ?",
+            (*params, limit))
         body = form + f'<div class="panel">{table_html(cols, rows)}</div>'
     except Exception as e:
         body = form + f'<div class="panel err">{h(str(e))}</div>'
@@ -959,15 +1065,19 @@ def page_findings(db_path, tool="", category="", limit=2000):
 
     try:
         where_parts = []
+        params = []
         if tool:
-            where_parts.append(f"source_tool = '{tool.replace(chr(39), chr(39)*2)}'")
+            where_parts.append("source_tool = ?")
+            params.append(tool)
         if category:
-            where_parts.append(f"category = '{category.replace(chr(39), chr(39)*2)}'")
+            where_parts.append("category = ?")
+            params.append(category)
         where = ("WHERE " + " AND ".join(where_parts)) if where_parts else ""
         cols, rows = run_query(db_path,
             f"SELECT source_tool, category, key, value, score, path, notes, created_at "
             f"FROM findings {where} "
-            f"ORDER BY score DESC, source_tool, category LIMIT {limit}")
+            f"ORDER BY score DESC, source_tool, category LIMIT ?",
+            (*params, limit))
         body = form + f'<div class="panel">{table_html(cols, rows)}</div>'
     except Exception as e:
         msg = str(e)
@@ -1015,7 +1125,7 @@ def export_file_via_icat(db_path, file_id, root):
         return None, "image_info.export_root not set"
 
     safe_name = os.path.basename(src_path or f"file-{fid}") or f"file-{fid}"
-    dest_dir = os.path.join(export_root, "exports", "files")
+    dest_dir = os.path.join(export_root, "exports", "files", f"file-{fid}")
     dest_path = os.path.join(dest_dir, safe_name)
 
     # If already extracted with non-zero size, just serve it
@@ -1124,16 +1234,26 @@ def page_gallery_fs(db_path, pg=0, per_page=48, all_images=False,
                     f'<div class="panel err">{h(str(e))}</div>',
                     db_name=db_path, nav_extra=" &rsaquo; gallery (fs)")
 
-    # Build query-string fragment that preserves active filters across pager/toggle links
-    def qs_filter(extra=""):
-        parts = [f"db={enc}", "mode=fs"]
-        if sort != "score": parts.append(f"sort={urllib.parse.quote(sort)}")
-        if order != default_order: parts.append(f"order={order}")
-        if camera: parts.append(f"camera={urllib.parse.quote(camera)}")
-        if year:   parts.append(f"year={urllib.parse.quote(year)}")
-        if min_score: parts.append(f"min_score={min_score}")
-        if extra:  parts.append(extra)
-        return "&".join(parts)
+    # Query strings preserve active filters while letting links override values.
+    def qs_filter(**overrides):
+        params = {
+            "db": db_path,
+            "mode": "fs",
+            "sort": sort,
+            "order": order,
+        }
+        if camera:
+            params["camera"] = camera
+        if year:
+            params["year"] = year
+        if min_score:
+            params["min_score"] = str(min_score)
+        for key, value in overrides.items():
+            if value is None or value == "" or value is False:
+                params.pop(key, None)
+            else:
+                params[key] = str(value)
+        return urllib.parse.urlencode(params)
 
     imgs = ""
     for r in rows:
@@ -1161,9 +1281,12 @@ def page_gallery_fs(db_path, pg=0, per_page=48, all_images=False,
 
     # Sort bar
     def sort_link(col, label):
-        new_order = "ASC" if (sort == col and order == "DESC") else "DESC"
+        if sort == col:
+            new_order = "ASC" if order == "DESC" else "DESC"
+        else:
+            new_order = _FS_SORT_COLS[col][1]
         indicator = (" &#9650;" if order == "ASC" else " &#9660;") if sort == col else ""
-        href = f"/gallery?{qs_filter(f'sort={col}&order={new_order}')}"
+        href = f"/gallery?{qs_filter(sort=col, order=new_order, page=None, all=None)}"
         style = "color:#7eb8f7;font-weight:bold" if sort == col else "color:var(--sub)"
         return f'<a href="{href}" style="{style}">{label}{indicator}</a>'
 
@@ -1192,25 +1315,25 @@ def page_gallery_fs(db_path, pg=0, per_page=48, all_images=False,
       <input type="number" name="min_score" value="{min_score or ''}" placeholder="Min score"
              style="width:90px;font-size:12px">
       <button type="submit" style="font-size:12px">Filter</button>
-      {"<a href='/gallery?" + qs_filter().replace(f"&camera={urllib.parse.quote(camera)}","").replace(f"&year={urllib.parse.quote(year)}","").replace(f"&min_score={min_score}","") + "' style='color:var(--sub);font-size:12px'>Clear</a>" if (camera or year or min_score) else ""}
+      {"<a href='/gallery?" + qs_filter(camera=None, year=None, min_score=None, page=None, all=None) + "' style='color:var(--sub);font-size:12px'>Clear</a>" if (camera or year or min_score) else ""}
     </form>"""
 
     btn = 'style="background:#0f3460;padding:3px 12px;border-radius:3px;color:#7eb8f7"'
     if all_images:
         header = f'<p class="count">{total:,} candidate(s) — all on one page</p>'
-        toggle = f'<a href="/gallery?{qs_filter()}" {btn}>&#9660; Paginated view</a>'
+        toggle = f'<a href="/gallery?{qs_filter(all=None, page=None)}" {btn}>&#9660; Paginated view</a>'
         pager = ""
     else:
         total_pages = max(1, (total + per_page - 1) // per_page)
         offset = pg * per_page
-        prev_link = (f'<a href="/gallery?{qs_filter(f"page={pg-1}")}">← Prev</a>'
+        prev_link = (f'<a href="/gallery?{qs_filter(page=pg-1)}">&larr; Prev</a>'
                      if pg > 0 else "")
-        next_link = (f'<a href="/gallery?{qs_filter(f"page={pg+1}")}">>Next →</a>'
+        next_link = (f'<a href="/gallery?{qs_filter(page=pg+1)}">Next &rarr;</a>'
                      if (offset + per_page) < total else "")
         pager = " &nbsp; ".join(filter(None, [prev_link, next_link]))
         header = (f'<p class="count">{total:,} candidate(s) &mdash; '
                   f'page {pg+1} of {total_pages} &nbsp; ({per_page} per page)</p>')
-        toggle = f'<a href="/gallery?{qs_filter("all=1")}" {btn}>&#9651; View all</a>'
+        toggle = f'<a href="/gallery?{qs_filter(all=1, page=None)}" {btn}>&#9651; View all</a>'
 
     note = ('<p class="count" style="margin-top:4px">Thumbnails extracted on demand via '
             '<code>icat</code>; cached under <code>exports/files/</code>.</p>')
@@ -1264,13 +1387,19 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
+        has_findings = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='findings'"
+        ).fetchone() is not None
 
-        tagged_total = conn.execute(
-            "SELECT COUNT(*) FROM recovered_artifacts ra "
-            "JOIN findings f ON f.artifact_id=ra.id "
-            "AND f.source_tool='llava' AND f.key='description' "
-            "WHERE ra.mime_type LIKE 'image/%'"
-        ).fetchone()[0]
+        if has_findings:
+            tagged_total = conn.execute(
+                "SELECT COUNT(*) FROM recovered_artifacts ra "
+                "JOIN findings f ON f.artifact_id=ra.id "
+                "AND f.source_tool='llava' AND f.key='description' "
+                "WHERE ra.mime_type LIKE 'image/%'"
+            ).fetchone()[0]
+        else:
+            tagged_total = 0
 
         # Populate method dropdown
         methods = [r[0] for r in conn.execute(
@@ -1282,29 +1411,40 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
         where_parts = ["ra.mime_type LIKE 'image/%'"]
         params: list = []
         findings_join = "LEFT JOIN"
+        join_sql = ""
+        desc_select = "'' AS description"
+        if has_findings:
+            join_sql = (
+                "{join_type} findings f ON f.artifact_id=ra.id "
+                "AND f.source_tool='llava' AND f.key='description' "
+            )
+            desc_select = "f.value AS description"
         if search:
-            findings_join = "JOIN"
-            where_parts.append("f.value LIKE ?")
-            params.append(f"%{search}%")
+            if has_findings:
+                findings_join = "JOIN"
+                where_parts.append("f.value LIKE ?")
+                params.append(f"%{search}%")
+            else:
+                where_parts.append("0")
         if method_filter:
             where_parts.append("ra.method = ?")
             params.append(method_filter)
         where_clause = " AND ".join(where_parts)
+        if join_sql:
+            join_sql = join_sql.format(join_type=findings_join)
 
         count_sql = (
             f"SELECT COUNT(*) FROM recovered_artifacts ra "
-            f"{findings_join} findings f ON f.artifact_id=ra.id "
-            f"AND f.source_tool='llava' AND f.key='description' "
+            f"{join_sql}"
             f"WHERE {where_clause}"
         )
         total = conn.execute(count_sql, params).fetchone()[0]
 
         base_sql = (
             f"SELECT ra.id, ra.full_path, ra.mime_type, ra.size_bytes, ra.method, "
-            f"f.value AS description "
+            f"{desc_select} "
             f"FROM recovered_artifacts ra "
-            f"{findings_join} findings f ON f.artifact_id=ra.id "
-            f"AND f.source_tool='llava' AND f.key='description' "
+            f"{join_sql}"
             f"WHERE {where_clause} "
             f"ORDER BY {order_sql}"
         )
@@ -1320,14 +1460,22 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
         return page("Image Gallery", f'<div class="panel err">{h(str(e))}</div>',
                     db_name=db_path)
 
-    def qs_filter(extra=""):
-        parts = [f"db={enc}"]
-        if sort != "size": parts.append(f"sort={urllib.parse.quote(sort)}")
-        if order != default_order: parts.append(f"order={order}")
-        if search: parts.append(f"search={urllib.parse.quote(search)}")
-        if method_filter: parts.append(f"method={urllib.parse.quote(method_filter)}")
-        if extra: parts.append(extra)
-        return "&".join(parts)
+    def qs_filter(**overrides):
+        params = {
+            "db": db_path,
+            "sort": sort,
+            "order": order,
+        }
+        if search:
+            params["search"] = search
+        if method_filter:
+            params["method"] = method_filter
+        for key, value in overrides.items():
+            if value is None or value == "" or value is False:
+                params.pop(key, None)
+            else:
+                params[key] = str(value)
+        return urllib.parse.urlencode(params)
 
     # Build image grid
     imgs = ""
@@ -1358,9 +1506,12 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
 
     # Sort bar
     def sort_link(col, label):
-        new_order = "ASC" if (sort == col and order == "DESC") else "DESC"
+        if sort == col:
+            new_order = "ASC" if order == "DESC" else "DESC"
+        else:
+            new_order = _CARVED_SORT_COLS[col][1]
         indicator = (" &#9650;" if order == "ASC" else " &#9660;") if sort == col else ""
-        href = f"/gallery?{qs_filter(f'sort={col}&order={new_order}')}"
+        href = f"/gallery?{qs_filter(sort=col, order=new_order, page=None, all=None)}"
         style = "color:#7eb8f7;font-weight:bold" if sort == col else "color:var(--sub)"
         return f'<a href="{href}" style="{style}">{label}{indicator}</a>'
 
@@ -1371,7 +1522,6 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
     ])
 
     # Method filter + description search in one form
-    senc = urllib.parse.quote(search)
     meth_opts = '<option value="">All methods</option>' + "".join(
         f'<option value="{h(m)}"{"selected" if m == method_filter else ""}>{h(m)}</option>'
         for m in methods)
@@ -1384,26 +1534,26 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
              style="width:200px;font-size:12px"
              title="Search llava descriptions — only tagged images are searched">
       <button type="submit" style="font-size:12px">Filter</button>
-      {"<a href='/gallery?db=" + enc + "' style='color:var(--sub);font-size:12px'>Clear</a>"
+      {"<a href='/gallery?" + qs_filter(search=None, method=None, page=None, all=None) + "' style='color:var(--sub);font-size:12px'>Clear</a>"
        if (search or method_filter) else ""}
     </form>"""
 
     btn = 'style="background:#0f3460;padding:3px 12px;border-radius:3px;color:#7eb8f7"'
     if all_images:
         header = f'<p class="count">{total:,} image(s) — all on one page</p>'
-        toggle = f'<a href="/gallery?{qs_filter()}" {btn}>&#9660; Paginated view</a>'
+        toggle = f'<a href="/gallery?{qs_filter(all=None, page=None)}" {btn}>&#9660; Paginated view</a>'
         pager = ""
     else:
         total_pages = max(1, (total + per_page - 1) // per_page)
         offset = pg * per_page
-        prev_link = (f'<a href="/gallery?{qs_filter(f"page={pg-1}")}">&larr; Prev</a>'
+        prev_link = (f'<a href="/gallery?{qs_filter(page=pg-1)}">&larr; Prev</a>'
                      if pg > 0 else "")
-        next_link = (f'<a href="/gallery?{qs_filter(f"page={pg+1}")}">>Next &rarr;</a>'
+        next_link = (f'<a href="/gallery?{qs_filter(page=pg+1)}">Next &rarr;</a>'
                      if (offset + per_page) < total else "")
         pager = " &nbsp; ".join(filter(None, [prev_link, next_link]))
         header = (f'<p class="count">{total:,} image(s) &mdash; '
                   f'page {pg+1} of {total_pages} &nbsp; ({per_page} per page)</p>')
-        toggle = f'<a href="/gallery?{qs_filter("all=1")}" {btn}>&#9651; View all</a>'
+        toggle = f'<a href="/gallery?{qs_filter(all=1, page=None)}" {btn}>&#9651; View all</a>'
 
     tag_note = (
         f'<span class="count" style="margin-left:12px">Showing {total:,} llava-matched</span>'
@@ -1811,8 +1961,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.end_headers()
                 return
             keep_going = pval("keep_going") == "1"
+            skip_done = pval("skip_done") == "1"
             try:
-                log_path, _pid = spawn_pipeline(db, presets, keep_going=keep_going)
+                log_path, _pid = spawn_pipeline(
+                    db, presets, keep_going=keep_going, skip_done=skip_done
+                )
             except Exception as e:
                 self.send_html(page("Error",
                     f'<p class="err">spawn failed: {h(str(e))}</p>'

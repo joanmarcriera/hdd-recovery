@@ -65,6 +65,7 @@ class DashboardScreen(Screen):
 
     def _update_table(self, disks: list[DiskInfo]) -> None:
         self._disks = disks
+        self.query_one(SystemBar).update_disks(disks)
         table = self.query_one(DataTable)
         table.clear()
 

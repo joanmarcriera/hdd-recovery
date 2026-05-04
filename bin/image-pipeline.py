@@ -14,6 +14,7 @@ Usage:
 Options:
   --run             execute (default: dry-run; print the resolved commands)
   --keep-going      continue after a stage fails (default: stop on first failure)
+  --skip-done       skip stages whose most recent completed scan_run is status=ok
   --list            print all eligible stage keys and exit
   --preset NAME     run a named bundle (see --list-presets)
   --list-presets    print available presets and exit

@@ -101,23 +101,10 @@ class _DiskSampler:
             self._prev[dev] = (sr, sw, now)
         return result
 
-    def active_loop_devices(self, min_mbs: float = 0.1) -> list[str]:
-        """Return loop device names with recent I/O above min_mbs (read or write)."""
-        now = time.monotonic()
+    def loop_devices(self) -> list[str]:
+        """Return currently visible loop device names."""
         stats = self._parse_diskstats()
-        active = []
-        for name, (sr, sw) in stats.items():
-            if not name.startswith("loop"):
-                continue
-            if name in self._prev:
-                pr, pw, pt = self._prev[name]
-                dt = now - pt
-                if dt > 0:
-                    r = (sr - pr) * 512 / dt / 1_048_576
-                    w = (sw - pw) * 512 / dt / 1_048_576
-                    if r >= min_mbs or w >= min_mbs:
-                        active.append(name)
-        return sorted(active)
+        return sorted(name for name in stats if name.startswith("loop"))
 
 
 def _sparkline(history: deque[float], max_val: float = 100.0) -> str:
@@ -164,25 +151,34 @@ def _mem_summary() -> str:
         return ""
 
 
-def _running_proc_info(disk: Optional[DiskInfo]) -> Optional[str]:
+def _running_proc_info(
+    disk: Optional[DiskInfo],
+    disks: Optional[list[DiskInfo]] = None,
+) -> Optional[str]:
     """
-    Return a short string like '⟳ photorec-broad  1h 23m  [T] tail log'
-    if a recovery process is found for the given disk.  Returns None otherwise.
-    """
-    # 1. Check scan_runs for a 'running' row and confirm via pgrep
-    if disk and disk.db_exists:
-        from state import _load_scan_runs
-        runs = _load_scan_runs(disk.db_path)
-        for run in reversed(runs):
-            if run.status != "running":
-                continue
-            if not _pgrep_alive(disk.basename):
-                continue
-            elapsed = _elapsed(run.started_at)
-            log_hint = "  [dim][T] tail log[/dim]" if run.log_path else ""
-            return f"[cyan]⟳[/cyan] [bold]{run.stage}[/bold]  {elapsed}{log_hint}"
+    Return short running-stage summaries.
 
-    # 2. Generic pgrep fallback (no disk context)
+    If a disk is supplied, this describes only that disk. If a disk list is
+    supplied, this describes every disk with a live running scan row.
+    """
+    if disk:
+        summary = _running_disk_summary(disk, include_tail_hint=True)
+        if summary:
+            return summary
+
+    if disks:
+        summaries = []
+        for d in disks:
+            summary = _running_disk_summary(d, include_disk_name=True)
+            if summary:
+                summaries.append(summary)
+        if summaries:
+            shown = summaries[:3]
+            if len(summaries) > len(shown):
+                shown.append(f"[dim]+{len(summaries) - len(shown)} more[/dim]")
+            return "  [dim]|[/dim]  ".join(shown)
+
+    # Generic pgrep fallback when no disk context has been loaded yet.
     try:
         r = subprocess.run(
             ["pgrep", "-af", "|".join(RECOVERY_PROCS)],
@@ -202,13 +198,59 @@ def _running_proc_info(disk: Optional[DiskInfo]) -> Optional[str]:
     return None
 
 
-def _pgrep_alive(basename: str) -> bool:
+def _running_disk_summary(
+    disk: DiskInfo,
+    include_disk_name: bool = False,
+    include_tail_hint: bool = False,
+) -> Optional[str]:
+    if not disk.db_exists:
+        return None
+    runs = disk.scan_runs
+    if not runs:
+        try:
+            from state import _load_scan_runs
+            runs = _load_scan_runs(disk.db_path)
+        except Exception:
+            runs = []
+    for run in reversed(runs):
+        if run.status != "running":
+            continue
+        if not _pgrep_alive(disk):
+            continue
+        elapsed = _elapsed(run.started_at)
+        prefix = "[cyan]⟳[/cyan]"
+        if include_disk_name:
+            name = _short_disk_name(disk)
+            return f"{prefix} [bold]{name}[/bold]: {run.stage} {elapsed}"
+        log_hint = "  [dim][T] tail log[/dim]" if include_tail_hint and run.log_path else ""
+        return f"{prefix} [bold]{run.stage}[/bold]  {elapsed}{log_hint}"
+    return None
+
+
+def _short_disk_name(disk: DiskInfo) -> str:
+    name = disk.source_model or disk.job_name or disk.basename
+    if "KINGSTON" in name.upper():
+        return "Kingston"
+    if "HITACHI" in name.upper():
+        return "Hitachi"
+    if len(name) > 18:
+        return name[:15] + "..."
+    return name
+
+
+def _pgrep_alive(disk: DiskInfo) -> bool:
     try:
         r = subprocess.run(
             ["pgrep", "-fa", "|".join(RECOVERY_PROCS)],
             capture_output=True, text=True, timeout=3,
         )
-        return basename in r.stdout
+        needles = [
+            disk.basename,
+            str(disk.image_path),
+            str(disk.db_path),
+            str(disk.export_root),
+        ]
+        return any(n and n in r.stdout for n in needles)
     except Exception:
         return False
 
@@ -265,9 +307,11 @@ class SystemBar(Widget):
     }
     """
 
-    def __init__(self, disk: Optional[DiskInfo] = None) -> None:
+    def __init__(self, disk: Optional[DiskInfo] = None,
+                 disks: Optional[list[DiskInfo]] = None) -> None:
         super().__init__()
         self.disk = disk
+        self.disks = disks or []
         self._cpu = _CpuSampler()
         self._disk = _DiskSampler()
         self._label: Optional[Static] = None
@@ -287,18 +331,28 @@ class SystemBar(Widget):
         try:
             cpu_pct = self._cpu.sample()
 
-            # Always sample the destination disk; add source dev and active loops
+            # Always sample the destination disk; add source dev and visible loops.
+            # Sampling all loops keeps history primed so active image reads show up
+            # on the next tick instead of never being detected.
             devs = [_DISK_DEV]
             src = (self.disk.source_dev or "").lstrip("/dev/") if self.disk else ""
             if src and src != _DISK_DEV:
                 devs.append(src)
-            loops = self._disk.active_loop_devices()
+            loops = self._disk.loop_devices()
             for lp in loops:
                 if lp not in devs:
                     devs.append(lp)
 
             io = self._disk.sample(devs)
-            proc_info = _running_proc_info(self.disk)
+            active_loops = [
+                lp for lp in loops
+                if max(io.get(lp, (0.0, 0.0))) >= 0.1
+            ]
+            devs = [_DISK_DEV]
+            if src and src != _DISK_DEV:
+                devs.append(src)
+            devs.extend(lp for lp in active_loops if lp not in devs)
+            proc_info = _running_proc_info(self.disk, self.disks)
             mem_info  = _mem_summary()
             self.app.call_from_thread(self._redraw, cpu_pct, io, devs, src, proc_info, mem_info)
         except Exception as exc:
@@ -350,3 +404,7 @@ class SystemBar(Widget):
     def update_disk(self, disk: Optional[DiskInfo]) -> None:
         """Call from the screen when the active disk changes."""
         self.disk = disk
+
+    def update_disks(self, disks: list[DiskInfo]) -> None:
+        """Call from the dashboard when its discovered disk list refreshes."""
+        self.disks = disks
