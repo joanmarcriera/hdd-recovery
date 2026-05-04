@@ -174,8 +174,16 @@ class DiskDetailScreen(Screen):
         prev_row = table.cursor_row
         table.clear()
 
-        done = sum(1 for v in statuses.values() if v == StageStatus.DONE)
-        self.sub_title = f"{self.disk.job_name}  [{done}/{len(STAGES)} done]"
+        done    = sum(1 for v in statuses.values() if v == StageStatus.DONE)
+        running = sum(1 for v in statuses.values() if v == StageStatus.RUNNING)
+        partial = sum(1 for v in statuses.values() if v == StageStatus.PARTIAL)
+        failed  = sum(1 for v in statuses.values() if v == StageStatus.FAILED)
+        extras = "".join([
+            f"  ⟳{running}" if running else "",
+            f"  ~{partial}" if partial else "",
+            f"  ✗{failed}"  if failed  else "",
+        ])
+        self.sub_title = f"{self.disk.job_name}  [{done}/{len(STAGES)} done{extras}]"
 
         for stage in STAGES:
             st = statuses[stage.key]

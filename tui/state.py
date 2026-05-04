@@ -435,21 +435,30 @@ def get_stage_status(disk: DiskInfo, stage: StageDef) -> StageStatus:  # noqa: C
     if key == "safecopy-stage1":
         if stage.pgrep_pattern and is_process_live(stage.pgrep_pattern, disk):
             return StageStatus.RUNNING
-        return StageStatus.DONE if disk.safecopy_s1_done else StageStatus.PENDING
+        if disk.safecopy_s1_done:
+            return StageStatus.DONE
+        # Image exists but was not created by safecopy → ddrescue path was taken
+        if disk.image_exists:
+            return StageStatus.SKIPPED
+        return StageStatus.PENDING
 
     if key == "safecopy-stage2":
         if stage.pgrep_pattern and is_process_live(stage.pgrep_pattern, disk):
             return StageStatus.RUNNING
+        if disk.safecopy_s2_done:
+            return StageStatus.DONE
         if not disk.safecopy_s1_done:
-            return StageStatus.PENDING
-        return StageStatus.DONE if disk.safecopy_s2_done else StageStatus.PENDING
+            return StageStatus.SKIPPED
+        return StageStatus.PENDING
 
     if key == "safecopy-stage3":
         if stage.pgrep_pattern and is_process_live(stage.pgrep_pattern, disk):
             return StageStatus.RUNNING
+        if disk.safecopy_s3_done:
+            return StageStatus.DONE
         if not disk.safecopy_s2_done:
-            return StageStatus.PENDING
-        return StageStatus.DONE if disk.safecopy_s3_done else StageStatus.PENDING
+            return StageStatus.SKIPPED
+        return StageStatus.PENDING
 
     # ── init-db ───────────────────────────────────────────────────────────
     if key == "init-db":

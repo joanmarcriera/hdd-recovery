@@ -103,6 +103,32 @@ def _cpu_color(pct: float) -> str:
     return "green"
 
 
+def _mem_summary() -> str:
+    """Return a short 'RAM X GB free / Y GB  swap Z GB free' string."""
+    try:
+        info: dict[str, int] = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            k, v = line.split(":", 1)
+            info[k.strip()] = int(v.split()[0])  # kB
+        avail_gb = info.get("MemAvailable", 0) / 1_048_576
+        total_gb = info.get("MemTotal",     0) / 1_048_576
+        swap_free_gb  = info.get("SwapFree",  0) / 1_048_576
+        swap_total_gb = info.get("SwapTotal", 0) / 1_048_576
+        ram_pct = 100 * (1 - avail_gb / total_gb) if total_gb else 0
+        ram_style = "bold red" if ram_pct > 90 else "yellow" if ram_pct > 75 else "green"
+        ram_part = f"[{ram_style}]{avail_gb:.1f}[/{ram_style}]/{total_gb:.0f} GB"
+        swap_part = ""
+        if swap_total_gb > 0:
+            swap_pct = 100 * (1 - swap_free_gb / swap_total_gb)
+            sw_style = "bold red" if swap_pct > 90 else "yellow" if swap_pct > 75 else "dim"
+            swap_part = f"  swap [{sw_style}]{swap_free_gb:.0f}[/{sw_style}]/{swap_total_gb:.0f} GB"
+        else:
+            swap_part = "  [yellow]no swap[/yellow]"
+        return f"RAM {ram_part}{swap_part}"
+    except Exception:
+        return ""
+
+
 def _running_proc_info(disk: Optional[DiskInfo]) -> Optional[str]:
     """
     Return a short string like '⟳ photorec-broad  1h 23m  [T] tail log'
@@ -227,7 +253,8 @@ class SystemBar(Widget):
             cpu_pct = self._cpu.sample()
             read_mbs, write_mbs = self._disk.sample()
             proc_info = _running_proc_info(self.disk)
-            self.app.call_from_thread(self._redraw, cpu_pct, read_mbs, write_mbs, proc_info)
+            mem_info  = _mem_summary()
+            self.app.call_from_thread(self._redraw, cpu_pct, read_mbs, write_mbs, proc_info, mem_info)
         except Exception as exc:
             self.app.call_from_thread(
                 self._label.update, f"[dim]monitor error: {exc}[/dim]"
@@ -239,6 +266,7 @@ class SystemBar(Widget):
         read_mbs: float,
         write_mbs: float,
         proc_info: Optional[str],
+        mem_info: str = "",
     ) -> None:
         if self._label is None:
             return
@@ -249,6 +277,8 @@ class SystemBar(Widget):
             f"CPU [{style}]{spark} {cpu_pct:4.0f}%[/{style}]",
             f"[dim]{_DISK_DEV}[/dim] ↓{read_mbs:5.1f} ↑{write_mbs:5.1f} MB/s",
         ]
+        if mem_info:
+            parts.append(mem_info)
         if proc_info:
             parts.append(proc_info)
 

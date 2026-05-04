@@ -83,6 +83,7 @@ class DashboardScreen(Screen):
 
             # Overall status icon: running > failed > partial > done > pending
             from stages import STAGES
+            from datetime import datetime, timezone
             statuses = [get_stage_status(disk, s) for s in STAGES]
             if StageStatus.RUNNING in statuses:
                 overall = StageStatus.RUNNING
@@ -115,15 +116,42 @@ class DashboardScreen(Screen):
             else:
                 map_cell = Text("—", style="dim")
 
+            n_partial = sum(1 for s in statuses if s == StageStatus.PARTIAL)
+            n_failed  = sum(1 for s in statuses if s == StageStatus.FAILED)
+            progress_text = f"{done}/{TOTAL_STAGES}"
+            if n_partial:
+                progress_text += f"  ~{n_partial}"
+            if n_failed:
+                progress_text += f"  ✗{n_failed}"
             progress_cell = Text(
-                f"{done}/{TOTAL_STAGES}",
+                progress_text,
                 style="green" if done == TOTAL_STAGES else "default",
             )
 
-            next_cell = Text(
-                f"{nxt.number}. {nxt.name}" if nxt else "All done ✓",
-                style="cyan" if nxt else "green",
+            # "Next step" cell: prefer the running stage with elapsed time over
+            # the next pending stage — tells the operator what is happening NOW.
+            next_cell_text = "All done ✓"
+            next_cell_style = "green"
+            running_stage = next(
+                (STAGES[j] for j, s in enumerate(statuses) if s == StageStatus.RUNNING),
+                None,
             )
+            if running_stage:
+                run = disk.latest_run(running_stage.scan_run_key) if running_stage.scan_run_key else None
+                elapsed = ""
+                if run and run.started_at:
+                    try:
+                        dt = datetime.fromisoformat(run.started_at.replace("Z", "+00:00"))
+                        secs = int((datetime.now(timezone.utc) - dt).total_seconds())
+                        elapsed = f"  {fmt_elapsed(secs)}"
+                    except Exception:
+                        pass
+                next_cell_text  = f"⟳ {running_stage.number}. {running_stage.name}{elapsed}"
+                next_cell_style = "bold cyan"
+            elif nxt:
+                next_cell_text  = f"{nxt.number}. {nxt.name}"
+                next_cell_style = "cyan"
+            next_cell = Text(next_cell_text, style=next_cell_style)
 
             table.add_row(
                 icon_cell,
