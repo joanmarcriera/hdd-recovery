@@ -47,7 +47,8 @@ For each image:
 
 Use:
 - [IMAGE-ANALYSIS-WORKFLOW.md](/root/hdd-recovery/IMAGE-ANALYSIS-WORKFLOW.md) for the core path
-- [BULK-DISCOVERY-WORKFLOW.md](/root/hdd-recovery/BULK-DISCOVERY-WORKFLOW.md) for the heavy path
+- this runbook for the heavy path; the older bulk-discovery workflow note has
+  been archived as a superseded historical document
 
 ## Commands
 

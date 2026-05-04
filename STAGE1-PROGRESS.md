@@ -1,5 +1,9 @@
 # Stage 1 Progress
 
+The original Stage 1 ticket spec has been archived after completion. This file
+is retained as the live audit trail for what landed and what still needs
+owner-side fixture/GPU verification.
+
 ## T0 — Schema migration mechanism
 Commit: 19d8fe9
 Status: complete

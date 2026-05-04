@@ -23,6 +23,7 @@ Designed for [TrueNAS SCALE](https://www.truenas.com/truenas-scale/) but works o
 - Extracts Windows `hiberfil.sys` / `pagefile.sys` and runs focused **Volatility3** memory scans
 - Keeps a per-image **SQLite** catalog of every stage: what ran, when, what it found
 - Exposes the full interactive **TUI** (Python Textual) via a browser-accessible terminal — no SSH required
+- Exposes a read-only web review UI on port `7788` for dashboards, recovered artifacts, picture galleries, timelines, and SQL queries
 - Integrates with a local **Ollama** instance for LLM-assisted analysis
 
 ---
@@ -43,6 +44,7 @@ Designed for [TrueNAS SCALE](https://www.truenas.com/truenas-scale/) but works o
                                                                    │   ├── full forensics toolchain             │
                                                                    │   ├── Textual TUI (Python)                 │
                                                                    │   ├── ttyd       →  :7681  (browser)       │
+                                                                   │   ├── web UI     →  :7788  (review)        │
                                                                    │   ├── supervisor →  :8080  (health API)    │
                                                                    │   └── Ollama client (via host-gateway)     │
                                                                    └─────────────────────────────────────────────┘
@@ -71,11 +73,12 @@ The imaging machine does one thing: run `ddrescue` to capture a raw image, then 
 
 5. Under **Networking**, add port forwards:
    - Container port `7681` → Host port `7681` (browser terminal)
-   - Container port `8080` → Host port `8080` (health check)
+   - Container port `7788` → Host port `7788` (read-only web review UI)
+   - Container port `8080` → Host port `8080` or another free port (health check)
 
-6. Click **Install**. After about a minute, open `http://truenas-ip:7681` in your browser. Log in with username `admin` and the password you set.
+6. Click **Install**. After about a minute, open `http://truenas-ip:7681` for the browser terminal, or `http://truenas-ip:7788` for the review UI. Log in to the browser terminal with username `admin` and the password you set.
 
-TrueNAS automatically uses `GET /health` on port `8080` as the app health probe once the port is mapped.
+TrueNAS automatically uses `GET /health` on the mapped health port once the container's `8080` port is exposed.
 
 ### Option B — docker compose
 
@@ -91,7 +94,7 @@ docker compose --env-file .env pull
 docker compose --env-file .env up -d
 ```
 
-Then open `http://truenas-ip:7681`.
+Then open `http://truenas-ip:7681` for the browser terminal or `http://truenas-ip:7788` for the review UI.
 
 ### Option C — docker run (one-liner)
 
@@ -99,7 +102,7 @@ Then open `http://truenas-ip:7681`.
 docker run -d \
   --name hdd-forensics \
   --restart unless-stopped \
-  -p 7681:7681 -p 8080:8080 \
+  -p 7681:7681 -p 7788:7788 -p 8080:8080 \
   -e TTYD_PASSWORD=yourpassword \
   -e OLLAMA_HOST=http://host-gateway:11434 \
   --add-host host-gateway:host-gateway \
@@ -135,7 +138,7 @@ The script:
 
 ## Full analysis workflow
 
-All commands run **inside the container** — either via the browser terminal at `http://truenas-ip:7681` or `docker exec -it hdd-forensics bash`.
+All commands run **inside the container** — either via the browser terminal at `http://truenas-ip:7681` or `docker exec -it hdd-forensics bash`. Use `http://truenas-ip:7788` for read-only review of dashboards, artifacts, galleries, timelines, and SQL queries.
 
 ```bash
 IMAGE=/mnt/recovery16tb/recovery/images/disk.img
@@ -203,6 +206,7 @@ Always run the metadata-first path (TSK index → wallet/picture detection) befo
 | `TTYD_USER` | no | `admin` | Username for the browser terminal |
 | `TTYD_PORT` | no | `7681` | Container port for the browser terminal |
 | `TTYD_CMD` | no | `cd /root/hdd-recovery && exec bin/tui.sh` | Command the terminal runs on each new connection |
+| `WEB_PORT` | no | `7788` | Container port for the read-only web review UI |
 | `HEALTH_PORT` | no | `8080` | Container port for the health/status API |
 | `OLLAMA_HOST` | no | `http://host-gateway:11434` | Ollama API URL (running on the Docker host) |
 | `DATA_ROOT` | no | `/mnt/BigDisk/CryptoBackup` | Host path mapped to `/mnt/recovery16tb` in docker-compose |
@@ -226,6 +230,7 @@ Always run the metadata-first path (TSK index → wallet/picture detection) befo
 | **Windows memory** | `Volatility3` |
 | **Full-text index** | `recoll` (opt-in via `ENABLE_RECOLL=1`) |
 | **Terminal UI** | Python Textual app, served via `ttyd` |
+| **Web review UI** | Read-only dashboard, artifact browser, galleries, timeline, and SQL query UI on `WEB_PORT` |
 | **Process manager** | Go supervisor (manages ttyd, serves health API) |
 
 > **Cracking GPU setup:** hashcat stages require NVIDIA Container Toolkit and a container started with GPU access, for example `--gpus all`. The helper in `lib/gpu_check.sh` runs `hashcat -I` and hard-fails if no NVIDIA GPU is visible. This prevents silent CPU fallback, which can waste days.

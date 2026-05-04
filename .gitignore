@@ -28,6 +28,7 @@ logs/
 recovered/
 indexes/
 reports/
+.archive/
 
 # Docker env file contains credentials — never commit
 docker/.env
