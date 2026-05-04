@@ -210,6 +210,77 @@ def find_databases(root):
             result.append(d)
     return result
 
+# ── memory / swap status ─────────────────────────────────────────────────────
+
+def mem_status():
+    """Read /proc/meminfo. Returns dict (ram_total, ram_avail, swap_total, swap_free) in MB."""
+    try:
+        info = {}
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                k, v = line.split(":", 1)
+                info[k.strip()] = int(v.split()[0])  # kB
+        return {
+            "ram_total":  info.get("MemTotal",    0) // 1024,
+            "ram_avail":  info.get("MemAvailable",0) // 1024,
+            "swap_total": info.get("SwapTotal",   0) // 1024,
+            "swap_free":  info.get("SwapFree",    0) // 1024,
+        }
+    except Exception:
+        return None
+
+
+def _bar(pct, color):
+    return (f'<div style="background:#1a2f4a;border-radius:3px;height:8px;'
+            f'width:180px;display:inline-block;vertical-align:middle">'
+            f'<div style="background:{color};width:{min(pct,100)}%;height:100%;'
+            f'border-radius:3px"></div></div>')
+
+
+def mem_panel():
+    m = mem_status()
+    if not m:
+        return ""
+    ram_used  = m["ram_total"]  - m["ram_avail"]
+    swap_used = m["swap_total"] - m["swap_free"]
+    ram_pct   = int(100 * ram_used  / m["ram_total"])  if m["ram_total"]  else 0
+    swap_pct  = int(100 * swap_used / m["swap_total"]) if m["swap_total"] else 0
+
+    ram_col  = "#cc2222" if ram_pct  > 90 else "#cc9900" if ram_pct  > 75 else "#22aa44"
+    swap_col = "#cc2222" if swap_pct > 90 else "#cc9900" if swap_pct > 75 else "#22aa44"
+
+    swap_label = (f'{m["swap_free"]:,} MB free / {m["swap_total"]:,} MB total'
+                  if m["swap_total"] else "none configured")
+
+    warn = ""
+    if m["swap_total"] == 0:
+        warn = ('<p style="color:#cc9900;margin-top:6px">&#9888; No swap configured. '
+                'Long carving and bulk_extractor stages may OOM on large images. '
+                'Add swap: <code>fallocate -l 32G /root/swapfile2 &amp;&amp; '
+                'mkswap /root/swapfile2 &amp;&amp; swapon /root/swapfile2</code></p>')
+    elif m["ram_avail"] < 2048 and m["swap_free"] < 8192:
+        warn = ('<p style="color:#cc2222;margin-top:6px">&#9888; RAM critically low and swap headroom '
+                'is under 8 GB — active carving stages risk OOM. '
+                'Add more swap or wait for current stage to finish.</p>')
+    elif m["ram_avail"] < 4096 and m["swap_free"] < 16384:
+        warn = ('<p style="color:#cc9900;margin-top:6px">&#9888; RAM is below 4 GB available and '
+                'swap headroom is limited. Consider adding swap before starting heavy stages: '
+                '<code>swapon -s</code> to check, '
+                '<code>swapon /path/to/existing/swapfile</code> to activate.</p>')
+
+    return f"""<div class="panel" style="padding:10px 14px;font-size:13px">
+      <span style="margin-right:24px">
+        <b>RAM</b>&nbsp; {m["ram_avail"]:,}&thinsp;MB free / {m["ram_total"]:,}&thinsp;MB total
+        &nbsp; {_bar(ram_pct, ram_col)}
+      </span>
+      <span>
+        <b>Swap</b>&nbsp; {swap_label}
+        {"&nbsp; " + _bar(swap_pct, swap_col) if m["swap_total"] else ""}
+      </span>
+      {warn}
+    </div>"""
+
+
 # ── pages ─────────────────────────────────────────────────────────────────────
 
 def page_home(root):
@@ -244,7 +315,7 @@ def page_home(root):
           <td style="text-align:center">{map_cell}</td>
         </tr>"""
 
-    body = f"""<div class="panel">
+    body = f"""{mem_panel()}<div class="panel">
       <p class="count">{len(dbs)} database(s) found under <code>{h(root)}</code></p>
       <table style="margin-top:10px">
         <tr><th>Database</th><th>Image</th><th>DB Size</th>
@@ -981,80 +1052,188 @@ def _safe_file_read(path, root):
         return None, str(e)
 
 
-def page_gallery_fs(db_path, pg=0, per_page=48, all_images=False):
-    """Gallery for filesystem-aware picture candidates. Each thumbnail is fetched
-    via /export_view, which extracts on demand via icat and caches under exports/files/."""
+_FS_SORT_COLS = {
+    "score":  ("pc.score",       "DESC"),
+    "size":   ("f.size_bytes",   "DESC"),
+    "date":   ("pc.taken_at",    "ASC"),
+    "name":   ("f.name",         "ASC"),
+    "camera": ("pc.camera_model","ASC"),
+}
+
+
+def page_gallery_fs(db_path, pg=0, per_page=48, all_images=False,
+                    sort="score", order="", camera="", min_score=0, year=""):
+    """Gallery for filesystem-aware picture candidates with sort + filter."""
     enc = urllib.parse.quote(db_path)
+
+    # Validate sort / order
+    sort = sort if sort in _FS_SORT_COLS else "score"
+    default_order = _FS_SORT_COLS[sort][1]
+    order = order.upper() if order.upper() in ("ASC", "DESC") else default_order
+    order_sql = f"{_FS_SORT_COLS[sort][0]} {order}"
+
+    # Build WHERE extras from filters
+    where_extra = ["f.size_bytes IS NOT NULL", "f.size_bytes > 0"]
+    params: list = []
+    if camera:
+        where_extra.append("pc.camera_model = ?")
+        params.append(camera)
+    if year:
+        where_extra.append("pc.taken_at LIKE ?")
+        params.append(f"{year}%")
+    if min_score:
+        where_extra.append("pc.score >= ?")
+        params.append(min_score)
+    where_clause = " AND ".join(where_extra)
+
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
-        total = conn.execute("""
-            SELECT COUNT(*) FROM picture_candidates pc
-            JOIN files f ON f.id = pc.file_id
-            WHERE f.size_bytes IS NOT NULL AND f.size_bytes > 0
-        """).fetchone()[0]
-        base_sql = """
-            SELECT f.id AS file_id, f.name, f.path, f.size_bytes,
-                   pc.score, pc.camera_model, pc.taken_at
-            FROM picture_candidates pc
-            JOIN files f ON f.id = pc.file_id
-            WHERE f.size_bytes IS NOT NULL AND f.size_bytes > 0
-            ORDER BY pc.score DESC, f.path
-        """
+
+        # Populate filter dropdowns
+        cameras = [r[0] for r in conn.execute(
+            "SELECT DISTINCT camera_model FROM picture_candidates "
+            "WHERE camera_model IS NOT NULL AND camera_model != '' ORDER BY camera_model"
+        ).fetchall()]
+        years = [r[0][:4] for r in conn.execute(
+            "SELECT DISTINCT taken_at FROM picture_candidates "
+            "WHERE taken_at IS NOT NULL AND taken_at != '' ORDER BY taken_at"
+        ).fetchall() if r[0] and len(r[0]) >= 4]
+        years = sorted(set(years), reverse=True)
+
+        count_sql = (f"SELECT COUNT(*) FROM picture_candidates pc "
+                     f"JOIN files f ON f.id = pc.file_id WHERE {where_clause}")
+        total = conn.execute(count_sql, params).fetchone()[0]
+
+        base_sql = (f"SELECT f.id AS file_id, f.name, f.path, f.size_bytes, "
+                    f"pc.score, pc.camera_model, pc.taken_at "
+                    f"FROM picture_candidates pc "
+                    f"JOIN files f ON f.id = pc.file_id "
+                    f"WHERE {where_clause} "
+                    f"ORDER BY {order_sql}, f.path")
+
         if all_images:
-            rows = conn.execute(base_sql).fetchall()
+            rows = conn.execute(base_sql, params).fetchall()
         else:
             offset = pg * per_page
-            rows = conn.execute(base_sql + f" LIMIT {per_page} OFFSET {offset}").fetchall()
+            rows = conn.execute(base_sql + f" LIMIT {per_page} OFFSET {offset}",
+                                params).fetchall()
         conn.close()
     except Exception as e:
         return page("Image Gallery (filesystem)",
                     f'<div class="panel err">{h(str(e))}</div>',
                     db_name=db_path, nav_extra=" &rsaquo; gallery (fs)")
 
+    # Build query-string fragment that preserves active filters across pager/toggle links
+    def qs_filter(extra=""):
+        parts = [f"db={enc}", "mode=fs"]
+        if sort != "score": parts.append(f"sort={urllib.parse.quote(sort)}")
+        if order != default_order: parts.append(f"order={order}")
+        if camera: parts.append(f"camera={urllib.parse.quote(camera)}")
+        if year:   parts.append(f"year={urllib.parse.quote(year)}")
+        if min_score: parts.append(f"min_score={min_score}")
+        if extra:  parts.append(extra)
+        return "&".join(parts)
+
     imgs = ""
     for r in rows:
-        fid = r["file_id"]
-        sz = r["size_bytes"] or 0
+        fid  = r["file_id"]
+        sz   = r["size_bytes"] or 0
         name = r["name"] or f"file-{fid}"
-        cam = r["camera_model"] or ""
+        cam  = r["camera_model"] or ""
         taken = r["taken_at"] or ""
-        meta = " — ".join(filter(None, [name, f"{sz:,} B", f"score {r['score']}", cam, taken]))
-        url = f"/export_view?db={enc}&file_id={fid}"
+        score = r["score"] or 0
+        meta = " — ".join(filter(None, [name, f"{sz:,} B", f"score {score}", cam, taken]))
+        url  = f"/export_view?db={enc}&file_id={fid}"
+        caption = " — ".join(filter(None, [cam, taken[:10] if taken else "", f"{sz//1024:,} KB"]))
         imgs += (
+            f'<div style="display:inline-block;text-align:center;vertical-align:top">'
             f'<a href="{url}" target="_blank" class="img-card" title="{h(meta)}">'
             f'<img src="{url}" loading="lazy" '
-            f'style="width:150px;height:112px;object-fit:cover;border-radius:4px;'
-            f'border:1px solid #333;background:#111"></a>'
+            f'style="width:150px;height:112px;object-fit:cover;border-radius:4px 4px 0 0;'
+            f'border:1px solid #333;border-bottom:none;background:#111"></a>'
+            f'<div style="width:150px;font-size:10px;color:var(--sub);background:#0d1117;'
+            f'border:1px solid #333;border-top:none;border-radius:0 0 4px 4px;'
+            f'padding:2px 3px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis"'
+            f' title="{h(caption)}">{h(caption) or "&nbsp;"}</div>'
+            f'</div>'
         )
+
+    # Sort bar
+    def sort_link(col, label):
+        new_order = "ASC" if (sort == col and order == "DESC") else "DESC"
+        indicator = (" &#9650;" if order == "ASC" else " &#9660;") if sort == col else ""
+        href = f"/gallery?{qs_filter(f'sort={col}&order={new_order}')}"
+        style = "color:#7eb8f7;font-weight:bold" if sort == col else "color:var(--sub)"
+        return f'<a href="{href}" style="{style}">{label}{indicator}</a>'
+
+    sort_bar = (" &nbsp;|&nbsp; ".join([
+        sort_link("score",  "Score"),
+        sort_link("size",   "Size"),
+        sort_link("date",   "Date"),
+        sort_link("name",   "Name"),
+        sort_link("camera", "Camera"),
+    ]))
+
+    # Filter form
+    cam_opts = '<option value="">All cameras</option>' + "".join(
+        f'<option value="{h(c)}"{"selected" if c == camera else ""}>{h(c)}</option>'
+        for c in cameras)
+    yr_opts = '<option value="">All years</option>' + "".join(
+        f'<option value="{y}"{"selected" if y == year else ""}>{y}</option>'
+        for y in years)
+    filter_form = f"""<form method="get" action="/gallery"
+        style="display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px">
+      <input type="hidden" name="db" value="{h(db_path)}">
+      <input type="hidden" name="mode" value="fs">
+      {"".join(f'<input type="hidden" name="{k}" value="{h(v)}">' for k,v in [("sort",sort),("order",order)] if v)}
+      <select name="camera" style="font-size:12px">{cam_opts}</select>
+      <select name="year"   style="font-size:12px">{yr_opts}</select>
+      <input type="number" name="min_score" value="{min_score or ''}" placeholder="Min score"
+             style="width:90px;font-size:12px">
+      <button type="submit" style="font-size:12px">Filter</button>
+      {"<a href='/gallery?" + qs_filter().replace(f"&camera={urllib.parse.quote(camera)}","").replace(f"&year={urllib.parse.quote(year)}","").replace(f"&min_score={min_score}","") + "' style='color:var(--sub);font-size:12px'>Clear</a>" if (camera or year or min_score) else ""}
+    </form>"""
 
     btn = 'style="background:#0f3460;padding:3px 12px;border-radius:3px;color:#7eb8f7"'
     if all_images:
-        header = f'<p class="count">{total:,} candidate(s) — all on one page (extraction is on-demand)</p>'
-        toggle = f'<a href="/gallery?db={enc}&mode=fs" {btn}>&#9660; Paginated view</a>'
+        header = f'<p class="count">{total:,} candidate(s) — all on one page</p>'
+        toggle = f'<a href="/gallery?{qs_filter()}" {btn}>&#9660; Paginated view</a>'
         pager = ""
     else:
         total_pages = max(1, (total + per_page - 1) // per_page)
         offset = pg * per_page
-        pg_base = f"/gallery?db={enc}&mode=fs"
-        prev_link = f'<a href="{pg_base}&page={pg-1}">&larr; Prev</a>' if pg > 0 else ""
-        next_link = f'<a href="{pg_base}&page={pg+1}">Next &rarr;</a>' if (offset + per_page) < total else ""
+        prev_link = (f'<a href="/gallery?{qs_filter(f"page={pg-1}")}">← Prev</a>'
+                     if pg > 0 else "")
+        next_link = (f'<a href="/gallery?{qs_filter(f"page={pg+1}")}">>Next →</a>'
+                     if (offset + per_page) < total else "")
         pager = " &nbsp; ".join(filter(None, [prev_link, next_link]))
-        header = f'<p class="count">{total:,} candidate(s) &mdash; page {pg+1} of {total_pages} &nbsp; ({per_page} per page)</p>'
-        all_href = f"/gallery?db={enc}&mode=fs&all=1"
-        toggle = f'<a href="{all_href}" {btn}>&#9651; View all on one page</a>'
+        header = (f'<p class="count">{total:,} candidate(s) &mdash; '
+                  f'page {pg+1} of {total_pages} &nbsp; ({per_page} per page)</p>')
+        toggle = f'<a href="/gallery?{qs_filter("all=1")}" {btn}>&#9651; View all</a>'
 
-    note = ('<p class="count" style="margin-top:6px">'
-            'Each thumbnail is extracted on demand via <code>icat</code> and cached '
-            'under <code>exports/files/</code>. First load may take a moment per image.</p>')
+    note = ('<p class="count" style="margin-top:4px">Thumbnails extracted on demand via '
+            '<code>icat</code>; cached under <code>exports/files/</code>.</p>')
+
+    active_filters = ", ".join(filter(None, [
+        f"camera: {camera}" if camera else "",
+        f"year: {year}" if year else "",
+        f"score ≥ {min_score}" if min_score else "",
+    ]))
+    filter_badge = (f' &nbsp; <span class="badge partial">{h(active_filters)}</span>'
+                    if active_filters else "")
 
     body = f"""
     <div class="panel">
-      {header}{note}
-      <p style="margin-top:6px">{toggle}</p>
+      {header}{filter_badge}{note}
+      <p style="margin-top:6px;display:flex;flex-wrap:wrap;align-items:center;gap:10px">
+        {toggle}
+        <span style="font-size:12px;color:var(--sub)">Sort:&nbsp;{sort_bar}</span>
+      </p>
+      {filter_form}
     </div>
     <div class="panel">
-      <div style="display:flex;flex-wrap:wrap;gap:6px">{imgs or '<p class="count">No filesystem candidates with size > 0.</p>'}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px">{imgs or '<p class="count">No candidates match.</p>'}</div>
     </div>
     {"<div class='panel'><p>" + pager + "</p></div>" if pager else ""}
     """
@@ -1062,64 +1241,93 @@ def page_gallery_fs(db_path, pg=0, per_page=48, all_images=False):
                 nav_extra=" &rsaquo; gallery (fs)")
 
 
-def page_gallery(db_path, root, pg=0, per_page=48, all_images=False, search=""):
-    """Paginated (or all-on-one-page) image gallery with LLM description search."""
+_CARVED_SORT_COLS = {
+    "size":   ("ra.size_bytes", "DESC"),
+    "method": ("ra.method",     "ASC"),
+    "path":   ("ra.full_path",  "ASC"),
+}
+
+
+def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
+                 search="", sort="size", order="", method_filter=""):
+    """Paginated image gallery for carved artifacts with sort, method filter, and description search."""
     enc = urllib.parse.quote(db_path)
     abs_root = os.path.realpath(root)
     search = search.strip()
 
-    # Base query: LEFT JOIN findings for llava descriptions.
-    # When searching, switch to INNER JOIN so only tagged+matching images appear.
+    # Validate sort / order
+    sort = sort if sort in _CARVED_SORT_COLS else "size"
+    default_order = _CARVED_SORT_COLS[sort][1]
+    order = order.upper() if order.upper() in ("ASC", "DESC") else default_order
+    order_sql = f"{_CARVED_SORT_COLS[sort][0]} {order}"
+
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
 
         tagged_total = conn.execute(
             "SELECT COUNT(*) FROM recovered_artifacts ra "
-            "JOIN findings f ON f.artifact_id=ra.id AND f.source_tool='llava' AND f.key='description' "
+            "JOIN findings f ON f.artifact_id=ra.id "
+            "AND f.source_tool='llava' AND f.key='description' "
             "WHERE ra.mime_type LIKE 'image/%'"
         ).fetchone()[0]
 
+        # Populate method dropdown
+        methods = [r[0] for r in conn.execute(
+            "SELECT DISTINCT method FROM recovered_artifacts "
+            "WHERE mime_type LIKE 'image/%' AND method IS NOT NULL ORDER BY method"
+        ).fetchall()]
+
+        # Build WHERE + params
+        where_parts = ["ra.mime_type LIKE 'image/%'"]
+        params: list = []
+        findings_join = "LEFT JOIN"
         if search:
-            count_sql = (
-                "SELECT COUNT(*) FROM recovered_artifacts ra "
-                "JOIN findings f ON f.artifact_id=ra.id AND f.source_tool='llava' AND f.key='description' "
-                "WHERE ra.mime_type LIKE 'image/%' AND f.value LIKE ?"
-            )
-            total = conn.execute(count_sql, (f"%{search}%",)).fetchone()[0]
-            base_sql = (
-                "SELECT ra.id, ra.full_path, ra.mime_type, ra.size_bytes, ra.method, f.value AS description "
-                "FROM recovered_artifacts ra "
-                "JOIN findings f ON f.artifact_id=ra.id AND f.source_tool='llava' AND f.key='description' "
-                "WHERE ra.mime_type LIKE 'image/%' AND f.value LIKE ? "
-                "ORDER BY ra.method, ra.full_path"
-            )
-            base_params = (f"%{search}%",)
-        else:
-            total = conn.execute(
-                "SELECT COUNT(*) FROM recovered_artifacts WHERE mime_type LIKE 'image/%'"
-            ).fetchone()[0]
-            base_sql = (
-                "SELECT ra.id, ra.full_path, ra.mime_type, ra.size_bytes, ra.method, "
-                "f.value AS description "
-                "FROM recovered_artifacts ra "
-                "LEFT JOIN findings f ON f.artifact_id=ra.id AND f.source_tool='llava' AND f.key='description' "
-                "WHERE ra.mime_type LIKE 'image/%' "
-                "ORDER BY ra.method, ra.full_path"
-            )
-            base_params = ()
+            findings_join = "JOIN"
+            where_parts.append("f.value LIKE ?")
+            params.append(f"%{search}%")
+        if method_filter:
+            where_parts.append("ra.method = ?")
+            params.append(method_filter)
+        where_clause = " AND ".join(where_parts)
+
+        count_sql = (
+            f"SELECT COUNT(*) FROM recovered_artifacts ra "
+            f"{findings_join} findings f ON f.artifact_id=ra.id "
+            f"AND f.source_tool='llava' AND f.key='description' "
+            f"WHERE {where_clause}"
+        )
+        total = conn.execute(count_sql, params).fetchone()[0]
+
+        base_sql = (
+            f"SELECT ra.id, ra.full_path, ra.mime_type, ra.size_bytes, ra.method, "
+            f"f.value AS description "
+            f"FROM recovered_artifacts ra "
+            f"{findings_join} findings f ON f.artifact_id=ra.id "
+            f"AND f.source_tool='llava' AND f.key='description' "
+            f"WHERE {where_clause} "
+            f"ORDER BY {order_sql}"
+        )
 
         if all_images:
-            rows = conn.execute(base_sql, base_params).fetchall()
+            rows = conn.execute(base_sql, params).fetchall()
         else:
             offset = pg * per_page
-            rows = conn.execute(
-                base_sql + f" LIMIT {per_page} OFFSET {offset}", base_params
-            ).fetchall()
+            rows = conn.execute(base_sql + f" LIMIT {per_page} OFFSET {offset}",
+                                params).fetchall()
         conn.close()
     except Exception as e:
-        body = f'<div class="panel err">{h(str(e))}</div>'
-        return page("Image Gallery", body, db_name=db_path)
+        return page("Image Gallery", f'<div class="panel err">{h(str(e))}</div>',
+                    db_name=db_path)
+
+    def qs_filter(extra=""):
+        parts = [f"db={enc}"]
+        if sort != "size": parts.append(f"sort={urllib.parse.quote(sort)}")
+        if order != default_order: parts.append(f"order={order}")
+        if search: parts.append(f"search={urllib.parse.quote(search)}")
+        if method_filter: parts.append(f"method={urllib.parse.quote(method_filter)}")
+        if extra: parts.append(extra)
+        return "&".join(parts)
 
     # Build image grid
     imgs = ""
@@ -1133,51 +1341,91 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False, search=""):
         fenc = urllib.parse.quote(fp)
         tip = f"{Path(fp).name} — {method} — {sz:,} B"
         desc_div = (f'<div class="desc">{h(desc[:200])}</div>' if desc else "")
+        caption = " — ".join(filter(None, [method, f"{sz//1024:,} KB" if sz else ""]))
         imgs += (
+            f'<div style="display:inline-block;text-align:center;vertical-align:top">'
             f'<a href="/file?path={fenc}" target="_blank" class="img-card" title="{h(tip)}">'
             f'<img src="/file?path={fenc}" loading="lazy" '
-            f'style="width:150px;height:112px;object-fit:cover;border-radius:4px;'
-            f'border:1px solid #333;background:#111">'
+            f'style="width:150px;height:112px;object-fit:cover;border-radius:4px 4px 0 0;'
+            f'border:1px solid #333;border-bottom:none;background:#111">'
             f'{desc_div}</a>'
+            f'<div style="width:150px;font-size:10px;color:var(--sub);background:#0d1117;'
+            f'border:1px solid #333;border-top:none;border-radius:0 0 4px 4px;'
+            f'padding:2px 3px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis"'
+            f' title="{h(caption)}">{h(caption) or "&nbsp;"}</div>'
+            f'</div>'
         )
 
-    # Controls
+    # Sort bar
+    def sort_link(col, label):
+        new_order = "ASC" if (sort == col and order == "DESC") else "DESC"
+        indicator = (" &#9650;" if order == "ASC" else " &#9660;") if sort == col else ""
+        href = f"/gallery?{qs_filter(f'sort={col}&order={new_order}')}"
+        style = "color:#7eb8f7;font-weight:bold" if sort == col else "color:var(--sub)"
+        return f'<a href="{href}" style="{style}">{label}{indicator}</a>'
+
+    sort_bar = " &nbsp;|&nbsp; ".join([
+        sort_link("size",   "Size"),
+        sort_link("method", "Method"),
+        sort_link("path",   "Path"),
+    ])
+
+    # Method filter + description search in one form
     senc = urllib.parse.quote(search)
-    btn = 'style="background:#0f3460;padding:3px 12px;border-radius:3px;color:#7eb8f7"'
-    search_box = f"""<form method="get" action="/gallery" style="display:inline-flex;gap:6px;align-items:center">
+    meth_opts = '<option value="">All methods</option>' + "".join(
+        f'<option value="{h(m)}"{"selected" if m == method_filter else ""}>{h(m)}</option>'
+        for m in methods)
+    filter_form = f"""<form method="get" action="/gallery"
+        style="display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px">
       <input type="hidden" name="db" value="{h(db_path)}">
-      <input type="text" name="search" value="{h(search)}" placeholder="Search descriptions…"
-             style="width:220px" title="Search llava descriptions — only tagged images are searched">
-      <button type="submit">Search</button>
-      {"<a href='/gallery?db=" + enc + "' style='color:var(--sub)'>Clear</a>" if search else ""}
+      {"".join(f'<input type="hidden" name="{k}" value="{h(v)}">' for k,v in [("sort",sort),("order",order)] if v)}
+      <select name="method" style="font-size:12px">{meth_opts}</select>
+      <input type="text" name="search" value="{h(search)}" placeholder="Search llava descriptions…"
+             style="width:200px;font-size:12px"
+             title="Search llava descriptions — only tagged images are searched">
+      <button type="submit" style="font-size:12px">Filter</button>
+      {"<a href='/gallery?db=" + enc + "' style='color:var(--sub);font-size:12px'>Clear</a>"
+       if (search or method_filter) else ""}
     </form>"""
 
+    btn = 'style="background:#0f3460;padding:3px 12px;border-radius:3px;color:#7eb8f7"'
     if all_images:
         header = f'<p class="count">{total:,} image(s) — all on one page</p>'
-        toggle = f'<a href="/gallery?db={enc}{"&search=" + senc if search else ""}" {btn}>&#9660; Paginated view</a>'
+        toggle = f'<a href="/gallery?{qs_filter()}" {btn}>&#9660; Paginated view</a>'
         pager = ""
     else:
         total_pages = max(1, (total + per_page - 1) // per_page)
         offset = pg * per_page
-        pg_base = f"/gallery?db={enc}" + (f"&search={senc}" if search else "")
-        prev_link = f'<a href="{pg_base}&page={pg-1}">&larr; Prev</a>' if pg > 0 else ""
-        next_link = f'<a href="{pg_base}&page={pg+1}">Next &rarr;</a>' if (offset + per_page) < total else ""
+        prev_link = (f'<a href="/gallery?{qs_filter(f"page={pg-1}")}">&larr; Prev</a>'
+                     if pg > 0 else "")
+        next_link = (f'<a href="/gallery?{qs_filter(f"page={pg+1}")}">>Next &rarr;</a>'
+                     if (offset + per_page) < total else "")
         pager = " &nbsp; ".join(filter(None, [prev_link, next_link]))
-        header = f'<p class="count">{total:,} image(s) &mdash; page {pg+1} of {total_pages} &nbsp; ({per_page} per page)</p>'
-        all_href = f"/gallery?db={enc}&all=1" + (f"&search={senc}" if search else "")
-        toggle = f'<a href="{all_href}" {btn}>&#9651; View all on one page</a>'
+        header = (f'<p class="count">{total:,} image(s) &mdash; '
+                  f'page {pg+1} of {total_pages} &nbsp; ({per_page} per page)</p>')
+        toggle = f'<a href="/gallery?{qs_filter("all=1")}" {btn}>&#9651; View all</a>'
 
-    tag_note = (f'<span class="count" style="margin-left:12px">'
-                f'&#127381; {tagged_total:,} of {total:,} tagged by llava</span>'
-                if not search else
-                f'<span class="count" style="margin-left:12px">Showing {total:,} matches in llava descriptions</span>')
+    tag_note = (
+        f'<span class="count" style="margin-left:12px">Showing {total:,} llava-matched</span>'
+        if search else
+        f'<span class="count" style="margin-left:12px">&#127381; {tagged_total:,} of {total:,} tagged by llava</span>'
+    )
+
+    active_filters = ", ".join(filter(None, [
+        f"method: {method_filter}" if method_filter else "",
+        f"desc: \"{search}\"" if search else "",
+    ]))
+    filter_badge = (f' &nbsp; <span class="badge partial">{h(active_filters)}</span>'
+                    if active_filters else "")
 
     body = f"""
     <div class="panel">
-      {header}{tag_note}
-      <p style="margin-top:10px;display:flex;align-items:center;flex-wrap:wrap;gap:8px">
-        {toggle} &nbsp;&nbsp; {search_box}
+      {header}{tag_note}{filter_badge}
+      <p style="margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:10px">
+        {toggle}
+        <span style="font-size:12px;color:var(--sub)">Sort:&nbsp;{sort_bar}</span>
       </p>
+      {filter_form}
     </div>
     <div class="panel">
       <div style="display:flex;flex-wrap:wrap;gap:6px">{imgs or '<p class="count">No images found.</p>'}</div>
@@ -1474,16 +1722,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif p == "/gallery":
                 all_images = self.qsval("all") == "1"
                 search = self.qsval("search")
-                mode = self.qsval("mode") or "carved"
+                sort  = self.qsval("sort")
+                order = self.qsval("order")
+                mode  = self.qsval("mode") or "carved"
                 try:
                     pg = max(0, int(self.qsval("page", "0") or "0"))
                 except ValueError:
                     pg = 0
                 if mode == "fs":
-                    self.send_html(page_gallery_fs(db, pg, all_images=all_images))
+                    camera = self.qsval("camera")
+                    year   = self.qsval("year")
+                    try:
+                        min_score = int(self.qsval("min_score") or "0")
+                    except ValueError:
+                        min_score = 0
+                    self.send_html(page_gallery_fs(db, pg, all_images=all_images,
+                                                   sort=sort, order=order,
+                                                   camera=camera, min_score=min_score,
+                                                   year=year))
                 else:
                     self.send_html(page_gallery(db, self.root, pg,
-                                                all_images=all_images, search=search))
+                                                all_images=all_images, search=search,
+                                                sort=sort, order=order,
+                                                method_filter=self.qsval("method")))
             elif p == "/export_view":
                 file_id = self.qsval("file_id")
                 data, mime_or_err = export_file_via_icat(db, file_id, self.root)
