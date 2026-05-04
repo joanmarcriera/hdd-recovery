@@ -68,10 +68,11 @@ class DashboardScreen(Screen):
         table = self.query_one(DataTable)
         table.clear()
 
-        from screens.webserver import server_pid, server_url
+        from screens.webserver import server_pid, display_url, _DEFAULT_HOST, _DEFAULT_PORT
         subtitle = self.query_one("#subtitle", Label)
         pid = server_pid()
-        web_hint = f"  │  [green]Web UI ●[/green] {escape(server_url())}" if pid else ""
+        web_hint = (f"  │  [green]Web UI ●[/green] {escape(display_url(_DEFAULT_HOST, _DEFAULT_PORT))}"
+                    if pid else "")
         if not disks:
             subtitle.update(f"No disks found — N to add, W web server, K backup{web_hint}")
             return
