@@ -98,19 +98,10 @@ func main() {
 	go runTtyd(cfg.ttydHost, cfg.ttydPort, cfg.ttydUser, cfg.ttydPassword, cfg.ttydCmd)
 	go runWebUI(cfg.webHost, cfg.webPort, cfg.webRoot)
 
-	terminalProxy := reverseProxy("http://" + cfg.ttydHost + ":" + cfg.ttydPort)
-	webProxy := reverseProxy("http://" + cfg.webHost + ":" + cfg.webPort)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", handleHealth)
-	mux.HandleFunc("/status", handleStatus)
-	mux.HandleFunc("/terminal", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, terminalBasePath, http.StatusFound)
-	})
-	mux.Handle(terminalBasePath, terminalProxy)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		webProxy.ServeHTTP(w, r)
-	})
+	mux := buildMux(
+		"http://"+cfg.ttydHost+":"+cfg.ttydPort,
+		"http://"+cfg.webHost+":"+cfg.webPort,
+	)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.uiPort,
@@ -365,6 +356,23 @@ func parseOllamaHosts() []string {
 		hosts = append(hosts, host)
 	}
 	return hosts
+}
+
+func buildMux(terminalTarget, webTarget string) *http.ServeMux {
+	terminalProxy := reverseProxy(terminalTarget)
+	webProxy := reverseProxy(webTarget)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("/status", handleStatus)
+	mux.HandleFunc("/terminal", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, terminalBasePath, http.StatusFound)
+	})
+	mux.Handle(terminalBasePath, terminalProxy)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		webProxy.ServeHTTP(w, r)
+	})
+	return mux
 }
 
 func reverseProxy(target string) *httputil.ReverseProxy {

@@ -172,9 +172,7 @@ class DiskInfo:
 # ---------------------------------------------------------------------------
 
 def default_db_path(image_path: Path) -> Path:
-    if str(DB_ROOT):
-        return DB_ROOT / f"{image_path.name}{DB_SUFFIX}"
-    return Path(str(image_path) + DB_SUFFIX)
+    return DB_ROOT / f"{image_path.name}{DB_SUFFIX}"
 
 
 def discover_disks() -> list[DiskInfo]:

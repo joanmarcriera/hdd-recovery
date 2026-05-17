@@ -55,7 +55,7 @@ default_export_root() {
   local image="$1"
   local base
   base="$(image_basename "$image")"
-  printf '%s/%s\n' "${EXPORT_ROOT:-/mnt/recovery16tb/recovery/exports}" "$base"
+  printf '%s/%s\n' "${EXPORT_ROOT:-/data/exports}" "$base"
 }
 
 ensure_parent_dir() {
