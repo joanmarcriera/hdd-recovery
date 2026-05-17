@@ -3,7 +3,12 @@
 # Wraps image-serve.py; use this from the TUI or command line.
 set -Eeuo pipefail
 
-ROOT_DIR="/root/hdd-recovery"
+ROOT_DIR="${HDD_RECOVERY_ROOT:-/root/hdd-recovery}"
+CONFIG_FILE="${HDD_RECOVERY_CONFIG:-$ROOT_DIR/config/analysis-pipeline.env}"
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
 
 usage() {
   cat <<'EOF'
@@ -11,8 +16,8 @@ Usage:
   image-serve.sh [options]
 
 Options:
-  --root DIR    Recovery root directory with *.analysis.sqlite files
-                (default: /mnt/recovery16tb/recovery)
+  --root DIR    Directory tree with *.analysis.sqlite files
+                (default: DB_ROOT, or /data/db)
   --port PORT   TCP port (default: 7788)
   --host HOST   Bind address (default: 127.0.0.1)
   -h, --help    Show this help
@@ -21,7 +26,7 @@ Opens: http://127.0.0.1:7788/ (localhost only by default)
 EOF
 }
 
-ROOT="/mnt/recovery16tb/recovery"
+ROOT="${DB_ROOT:-/data/db}"
 PORT=7788
 HOST="127.0.0.1"
 

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from config import (
-    BIN_DIR, DB_SUFFIX, EXPORT_ROOT, IMAGE_ROOT, JOBS_DIR, LOG_ROOT,
+    BIN_DIR, DB_ROOT, DB_SUFFIX, EXPORT_ROOT, IMAGE_ROOT, JOBS_DIR, LOG_ROOT,
     load_job_conf,
 )
 from stages import StageDef, STAGES
@@ -171,6 +171,12 @@ class DiskInfo:
 # Discovery
 # ---------------------------------------------------------------------------
 
+def default_db_path(image_path: Path) -> Path:
+    if str(DB_ROOT):
+        return DB_ROOT / f"{image_path.name}{DB_SUFFIX}"
+    return Path(str(image_path) + DB_SUFFIX)
+
+
 def discover_disks() -> list[DiskInfo]:
     disks: list[DiskInfo] = []
     seen: set[str] = set()
@@ -201,7 +207,7 @@ def discover_disks() -> list[DiskInfo]:
                 source_dev="",
                 image_path=img,
                 map_path=_find_map(basename),
-                db_path=Path(str(img) + DB_SUFFIX),
+                db_path=default_db_path(img),
                 export_root=EXPORT_ROOT / basename,
             )
             _populate(d)
@@ -220,7 +226,7 @@ def _disk_from_conf(conf_path: Path) -> Optional[DiskInfo]:
     image_path = Path(image_file) if image_file else IMAGE_ROOT / f"{basename}.img"
     map_file = conf.get("MAP_FILE", "")
     map_path = Path(map_file) if map_file else _find_map(basename)
-    db_path = Path(str(image_path) + DB_SUFFIX)
+    db_path = default_db_path(image_path)
     rate_log_str = conf.get("RATE_LOG", "")
     rate_log_path = Path(rate_log_str) if rate_log_str else LOG_ROOT / f"{basename}.rates.log"
     try:

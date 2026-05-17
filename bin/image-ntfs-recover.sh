@@ -3,7 +3,7 @@
 # Works via read-only loop devices; never writes to source.
 set -Eeuo pipefail
 
-ROOT_DIR="/root/hdd-recovery"
+ROOT_DIR="${HDD_RECOVERY_ROOT:-/root/hdd-recovery}"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/lib/common.sh"
 

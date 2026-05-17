@@ -17,7 +17,7 @@ The findings table is created automatically if absent (schema is idempotent).
 Progress is tracked in scan_runs.  Interrupt with Ctrl-C; re-run to resume.
 """
 
-import argparse, base64, json, os, sqlite3, sys, time, urllib.request, urllib.error
+import argparse, base64, concurrent.futures, json, os, sqlite3, sys, time, urllib.request, urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -58,6 +58,25 @@ def log(msg):
     print(f"[{now_iso()}] {msg}", flush=True)
 
 
+def parse_ollama_urls(cli_value, env=os.environ):
+    raw = cli_value or env.get("OLLAMA_HOSTS") or env.get("OLLAMA_HOST") or "http://localhost:11434"
+    urls = []
+    seen = set()
+    for part in raw.split(","):
+        url = part.strip().rstrip("/")
+        if not url or url in seen:
+            continue
+        urls.append(url)
+        seen.add(url)
+    return urls or ["http://localhost:11434"]
+
+
+def default_worker_count(ollama_urls, requested):
+    if requested is not None:
+        return max(1, requested)
+    return max(1, len(ollama_urls))
+
+
 def open_db(path):
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
@@ -72,9 +91,10 @@ def open_db(path):
     return conn
 
 
-def record_start(conn, scope, min_size, limit, model, ollama_url):
+def record_start(conn, scope, min_size, limit, model, ollama_urls, workers):
+    ollama_label = ",".join(ollama_urls)
     cmd = (f"image-tag-photos.py <db> --scope {scope} --min-size {min_size} "
-           f"--model {model} --ollama {ollama_url}"
+           f"--model {model} --ollama {ollama_label} --workers {workers}"
            + (f" --limit {limit}" if limit else ""))
     cur = conn.execute(
         "INSERT INTO scan_runs (stage, status, started_at, command_line) VALUES (?,?,?,?)",
@@ -163,7 +183,9 @@ def main():
     ap.add_argument("--model", default="llava:7b",
                     help="Ollama vision model name (default: llava:7b)")
     ap.add_argument("--ollama", default=None,
-                    help="Ollama base URL (default: $OLLAMA_HOST or http://localhost:11434)")
+                    help="Ollama base URL or comma-separated URLs (default: $OLLAMA_HOSTS, $OLLAMA_HOST, or http://localhost:11434)")
+    ap.add_argument("--workers", type=int, default=None,
+                    help="Parallel Ollama calls (default: number of configured Ollama URLs)")
     ap.add_argument("--prompt", default=DEFAULT_PROMPT,
                     help="Prompt sent to the model for every image")
     ap.add_argument("--dry-run", action="store_true",
@@ -177,21 +199,24 @@ def main():
     if not os.path.isfile(args.db):
         sys.exit(f"Database not found: {args.db}")
 
-    ollama_url = args.ollama or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    ollama_urls = parse_ollama_urls(args.ollama)
+    workers = default_worker_count(ollama_urls, args.workers)
     min_size = args.min_size if args.min_size is not None else (20480 if args.scope == "real" else 10240)
 
     log(f"DB:       {args.db}")
     log(f"Scope:    {args.scope}  |  min-size: {min_size:,} B  |  model: {args.model}")
-    log(f"Ollama:   {ollama_url}")
+    log(f"Ollama:   {', '.join(ollama_urls)}")
+    log(f"Workers:  {workers}")
     log(f"Max attempts per image: {args.max_attempts}  |  retry backoff: {args.retry_backoff:.1f}s")
     if args.dry_run:
         log("DRY RUN — no Ollama calls will be made")
 
     if not args.dry_run:
-        try:
-            probe_ollama(ollama_url, args.model)
-        except Exception as e:
-            sys.exit(f"Cannot reach Ollama at {ollama_url}: {e}")
+        for ollama_url in ollama_urls:
+            try:
+                probe_ollama(ollama_url, args.model)
+            except Exception as e:
+                sys.exit(f"Cannot reach Ollama at {ollama_url}: {e}")
 
     conn = open_db(args.db)
 
@@ -223,43 +248,64 @@ def main():
         conn.close()
         return
 
-    run_id = record_start(conn, args.scope, min_size, args.limit, args.model, ollama_url)
+    run_id = record_start(conn, args.scope, min_size, args.limit, args.model, ollama_urls, workers)
 
     tagged = skipped = 0
     pending = []   # rows that errored on this attempt — retried at end of pass
     missing = 0
     t_start = time.time()
 
-    def attempt(row, label):
-        """Try to tag one image. Returns True on success, False on transient error.
-        On success, increments `tagged` via outer scope. On failure, returns False
-        so the caller can append to `pending`."""
-        nonlocal tagged
+    def attempt(row, label, ollama_url):
+        """Try to tag one image. Returns a result tuple for main-thread DB writes."""
         artifact_id = row["id"]
         full_path   = row["full_path"]
         size_bytes  = row["size_bytes"] or 0
 
         if not os.path.isfile(full_path):
-            log(f"{label} MISSING: {full_path}")
-            return None  # permanent — don't retry
+            return ("missing", row, full_path, "", 0.0, "")
 
-        log(f"{label} {Path(full_path).name} ({size_bytes/1024:.0f} KB) …")
         try:
             t1 = time.time()
             desc = call_llava(ollama_url, args.model, full_path, args.prompt)
             took = time.time() - t1
-            store_description(conn, artifact_id, full_path, desc)
-            tagged += 1
-            log(f"{label} OK in {took:.1f}s — {desc[:120]}")
-            return True
+            return ("ok", row, full_path, desc, took, ollama_url)
         except Exception as e:
-            log(f"{label} ERROR: {e}")
-            return False
+            return ("error", row, full_path, str(e), 0.0, ollama_url)
+
+    def run_batch(rows, label_prefix):
+        nonlocal tagged, missing
+        failed = []
+        if not rows:
+            return failed
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            future_map = {}
+            for j, row in enumerate(rows):
+                ollama_url = ollama_urls[j % len(ollama_urls)]
+                label = f"{label_prefix} {j+1}/{len(rows)}"
+                size_bytes = row["size_bytes"] or 0
+                log(f"[{label}] {Path(row['full_path']).name} ({size_bytes/1024:.0f} KB) via {ollama_url} ...")
+                future = pool.submit(attempt, row, label, ollama_url)
+                future_map[future] = label
+            for future in concurrent.futures.as_completed(future_map):
+                label = future_map[future]
+                status, row, full_path, value, took, ollama_url = future.result()
+                if status == "ok":
+                    store_description(conn, row["id"], full_path, value)
+                    tagged += 1
+                    log(f"[{label}] OK in {took:.1f}s via {ollama_url} - {value[:120]}")
+                elif status == "missing":
+                    missing += 1
+                    log(f"[{label}] MISSING: {full_path}")
+                else:
+                    failed.append(row)
+                    log(f"[{label}] ERROR via {ollama_url}: {value}")
+        return failed
 
     try:
         # ---- Pass 1: walk all candidates ----
+        first_pass = []
         for i, row in enumerate(candidates):
-            if args.limit is not None and tagged >= args.limit:
+            if args.limit is not None and len(first_pass) >= args.limit:
                 break
 
             if not args.force and is_tagged(conn, row["id"]):
@@ -270,13 +316,10 @@ def main():
             rate = tagged / elapsed if elapsed > 0 and tagged > 0 else 0
             remaining_count = total - i - skipped
             eta = fmt_eta(remaining_count / rate) if rate > 0 else "?"
-            label = f"[{i+1}/{total}] eta {eta}"
+            log(f"[{i+1}/{total}] eta {eta} queued")
+            first_pass.append(row)
 
-            result = attempt(row, label)
-            if result is None:
-                missing += 1
-            elif result is False:
-                pending.append(row)
+        pending = run_batch(first_pass, "pass 1")
 
         # ---- Retry passes for transient failures ----
         round_idx = 1
@@ -288,14 +331,7 @@ def main():
                 time.sleep(args.retry_backoff)
             log(f"Retry round {round_idx}/{args.max_attempts - 1}: "
                 f"{len(pending)} image(s) to retry")
-            still_pending = []
-            for j, row in enumerate(pending):
-                label = f"[retry {round_idx} {j+1}/{len(pending)}]"
-                result = attempt(row, label)
-                if result is False:
-                    still_pending.append(row)
-                # result True or None: drop from the queue
-            pending = still_pending
+            pending = run_batch(pending, f"retry {round_idx}")
             round_idx += 1
 
     except KeyboardInterrupt:

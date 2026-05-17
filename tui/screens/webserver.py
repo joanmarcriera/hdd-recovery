@@ -14,12 +14,12 @@ from textual.containers import Horizontal
 from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, Label, Static
 
-from config import BIN_DIR
+from config import BIN_DIR, DB_ROOT
 
 _PID_FILE = Path("/tmp/hdd-recovery-webui.pid")
-_DEFAULT_ROOT = "/mnt/recovery16tb/recovery"
-_DEFAULT_HOST = "0.0.0.0"
-_DEFAULT_PORT = "7788"
+_DEFAULT_ROOT = str(DB_ROOT) if str(DB_ROOT) else "/data/db"
+_DEFAULT_HOST = "127.0.0.1"
+_DEFAULT_PORT = "17788"
 
 
 def get_local_ip() -> str:

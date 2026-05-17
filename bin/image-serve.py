@@ -1984,8 +1984,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--root", default="/mnt/recovery16tb/recovery",
-                    help="Recovery root directory to search for *.analysis.sqlite files")
+    ap.add_argument("--root", default=os.environ.get("DB_ROOT", "/data/db"),
+                    help="Directory tree to search for *.analysis.sqlite files (default: $DB_ROOT or /data/db)")
     ap.add_argument("--port", type=int, default=7788, help="TCP port (default: 7788)")
     ap.add_argument("--host", default="127.0.0.1",
                     help="Bind address (default: 127.0.0.1, localhost only)")

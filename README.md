@@ -22,9 +22,9 @@ Designed for [TrueNAS SCALE](https://www.truenas.com/truenas-scale/) but works o
 - Enriches carved files with **TrID**, image quality scores, and perceptual photo deduplication
 - Extracts Windows `hiberfil.sys` / `pagefile.sys` and runs focused **Volatility3** memory scans
 - Keeps a per-image **SQLite** catalog of every stage: what ran, when, what it found
-- Exposes the full interactive **TUI** (Python Textual) via a browser-accessible terminal — no SSH required
-- Exposes a read-only web review UI on port `7788` for dashboards, recovered artifacts, picture galleries, timelines, and SQL queries
-- Integrates with a local **Ollama** instance for LLM-assisted analysis
+- Exposes one browser UI on port `7788`: review dashboard at `/`, terminal TUI at `/terminal/`, and health/status at `/health` and `/status`
+- Supports separate mount roots for raw images, SQLite catalogs, recovered exports, and logs so TrueNAS can place each workload on the right pool
+- Integrates with remote **Ollama** instances for LLM-assisted image tagging
 
 ---
 
@@ -34,23 +34,22 @@ Designed for [TrueNAS SCALE](https://www.truenas.com/truenas-scale/) but works o
 ┌─────────────────────────────────────┐       rsync / SSH        ┌─────────────────────────────────────────────┐
 │   Imaging machine (Optiplex/Kali)   │ ────────────────────────► │   TrueNAS SCALE (12 CPU / 96 GB / RTX 4060) │
 │                                     │                           │                                             │
-│   • ddrescue  →  disk.img           │                           │   ZFS pool                                  │
-│   • image-analysis-init.sh          │                           │   └── /mnt/BigDisk/CryptoBackup/            │
-│   • image-structure-scan.sh         │                           │        ├── recovery/images/*.img            │
-│   • send-image-to-truenas.sh        │                           │        ├── recovery/exports/<name>/         │
-│                                     │                           │        └── recovery/logs/                   │
+│   • ddrescue  →  disk.img           │                           │   Storage pools / datasets                  │
+│   • send image to TrueNAS           │                           │   ├── /data/images   raw ddrescue images    │
+│                                     │                           │   ├── /data/db       SQLite on fast NVMe    │
+│                                     │                           │   ├── /data/exports  recovered data         │
+│                                     │                           │   └── /data/logs     maps and stage logs    │
 │   Plug in the next disk  ──────────►│                           │                                             │
 └─────────────────────────────────────┘                           │   Docker container: hdd-forensics           │
                                                                    │   ├── full forensics toolchain             │
-                                                                   │   ├── Textual TUI (Python)                 │
-                                                                   │   ├── ttyd       →  :7681  (browser)       │
-                                                                   │   ├── web UI     →  :7788  (review)        │
-                                                                   │   ├── supervisor →  :8080  (health API)    │
-                                                                   │   └── Ollama client (via host-gateway)     │
+                                                                   │   ├── Textual TUI via /terminal/           │
+                                                                   │   ├── review UI via /                     │
+                                                                   │   ├── health/status via /health /status    │
+                                                                   │   └── Ollama client to remote endpoint(s)  │
                                                                    └─────────────────────────────────────────────┘
 ```
 
-The imaging machine does one thing: run `ddrescue` to capture a raw image, then `rsync` it to TrueNAS. TrueNAS runs the Docker container and handles all analysis while the imaging machine moves on to the next disk.
+The imaging machine does one thing: run `ddrescue` to capture a raw image, then copy it to the image dataset. TrueNAS runs the Docker container and handles analysis. SQLite writes can go to NVMe while raw images and recovered outputs stay on large-capacity storage.
 
 ---
 
@@ -65,20 +64,24 @@ The imaging machine does one thing: run `ddrescue` to capture a raw image, then 
    | Variable | Value |
    |----------|-------|
    | `TTYD_PASSWORD` | your chosen password (required) |
-   | `OLLAMA_HOST` | `http://host-gateway:11434` |
+   | `OLLAMA_HOST` | `http://host-gateway:11434` or a LAN URL |
+   | `IMAGE_ROOT` | `/data/images` |
+   | `DB_ROOT` | `/data/db` |
+   | `EXPORT_ROOT` | `/data/exports` |
+   | `LOG_ROOT` | `/data/logs` |
 
-4. Under **Storage**, add a host path volume:
-   - **Host path:** `/mnt/BigDisk/CryptoBackup`
-   - **Mount path:** `/mnt/recovery16tb`
+4. Under **Storage**, add four host path volumes:
+   - Raw images: host `/mnt/BigDisk/CryptoBackup/images` → container `/data/images`
+   - SQLite DB: host `/mnt/FastPool/hdd-recovery-db` → container `/data/db`
+   - Recovered exports: host `/mnt/BigDisk/CryptoBackup/exports` → container `/data/exports`
+   - Logs/maps: host `/mnt/BigDisk/CryptoBackup/logs` → container `/data/logs`
 
-5. Under **Networking**, add port forwards:
-   - Container port `7681` → Host port `7681` (browser terminal)
-   - Container port `7788` → Host port `7788` (read-only web review UI)
-   - Container port `8080` → Host port `8080` or another free port (health check)
+5. Under **Networking**, add one port forward:
+   - Container port `7788` → Host port `7788`
 
-6. Click **Install**. After about a minute, open `http://truenas-ip:7681` for the browser terminal, or `http://truenas-ip:7788` for the review UI. Log in to the browser terminal with username `admin` and the password you set.
+6. Click **Install**. After about a minute, open `http://truenas-ip:7788/` for the review UI or `http://truenas-ip:7788/terminal/` for the TUI terminal. Log in to the terminal with username `admin` and the password you set.
 
-TrueNAS automatically uses `GET /health` on the mapped health port once the container's `8080` port is exposed.
+Use `GET /health` on the same mapped UI port for the TrueNAS health probe.
 
 ### Option B — docker compose
 
@@ -87,14 +90,13 @@ TrueNAS automatically uses `GET /health` on the mapped health port once the cont
 git clone https://github.com/joanmarcriera/hdd-forensics.git /mnt/BigDisk/hdd-forensics
 cd /mnt/BigDisk/hdd-forensics/docker
 
-cp .env.example .env
-# Edit .env: set TTYD_PASSWORD and verify DATA_ROOT
+# Edit .env or export variables: set TTYD_PASSWORD and host mount paths
 
 docker compose --env-file .env pull
 docker compose --env-file .env up -d
 ```
 
-Then open `http://truenas-ip:7681` for the browser terminal or `http://truenas-ip:7788` for the review UI.
+Then open `http://truenas-ip:7788/` for the review UI or `http://truenas-ip:7788/terminal/` for the terminal TUI.
 
 ### Option C — docker run (one-liner)
 
@@ -102,11 +104,18 @@ Then open `http://truenas-ip:7681` for the browser terminal or `http://truenas-i
 docker run -d \
   --name hdd-forensics \
   --restart unless-stopped \
-  -p 7681:7681 -p 7788:7788 -p 8080:8080 \
+  -p 7788:7788 \
   -e TTYD_PASSWORD=yourpassword \
   -e OLLAMA_HOST=http://host-gateway:11434 \
+  -e IMAGE_ROOT=/data/images \
+  -e DB_ROOT=/data/db \
+  -e EXPORT_ROOT=/data/exports \
+  -e LOG_ROOT=/data/logs \
   --add-host host-gateway:host-gateway \
-  -v /mnt/BigDisk/CryptoBackup:/mnt/recovery16tb \
+  -v /mnt/BigDisk/CryptoBackup/images:/data/images \
+  -v /mnt/FastPool/hdd-recovery-db:/data/db \
+  -v /mnt/BigDisk/CryptoBackup/exports:/data/exports \
+  -v /mnt/BigDisk/CryptoBackup/logs:/data/logs \
   joanmarcriera/hdd-forensics:latest
 ```
 
@@ -119,8 +128,8 @@ After `ddrescue` finishes on the Kali/Linux imaging machine, initialize and tran
 ```bash
 # 1. Initialize the analysis database and scan partition structure
 IMAGE=/path/to/disk.img
-bin/image-analysis-init.sh "$IMAGE"
-bin/image-structure-scan.sh "${IMAGE}.analysis.sqlite"
+DB="$(bin/image-analysis-init.sh "$IMAGE" --print-db-path)"
+bin/image-structure-scan.sh "$DB"
 
 # 2. Transfer to TrueNAS (SSH key auth required)
 #    Usage: send-image-to-truenas.sh <image> <truenas-host> [<remote-data-root>]
@@ -138,11 +147,11 @@ The script:
 
 ## Full analysis workflow
 
-All commands run **inside the container** — either via the browser terminal at `http://truenas-ip:7681` or `docker exec -it hdd-forensics bash`. Use `http://truenas-ip:7788` for read-only review of dashboards, artifacts, galleries, timelines, and SQL queries.
+All commands run **inside the container** — either via the browser terminal at `http://truenas-ip:7788/terminal/` or `docker exec -it hdd-forensics bash`. Use `http://truenas-ip:7788/` for read-only review of dashboards, artifacts, galleries, timelines, and SQL queries.
 
 ```bash
-IMAGE=/mnt/recovery16tb/recovery/images/disk.img
-DB=${IMAGE}.analysis.sqlite
+IMAGE=/data/images/disk.img
+DB=/data/db/disk.img.analysis.sqlite
 
 # ── Fast path (metadata-first, runs in minutes) ──────────────────────────────
 bin/image-index-tsk.sh $DB          # filesystem inventory via fiwalk (all files, deleted)
@@ -187,7 +196,7 @@ bin/image-report.sh $DB
 **Or run everything at once (unattended):**
 
 ```bash
-bin/image-bulk-discovery-run.sh /mnt/recovery16tb/recovery/images/disk.img
+bin/image-bulk-discovery-run.sh /data/images/disk.img
 ```
 
 `image-bulk-discovery-run.sh` accepts `--map <ddrescue-map>` and `--with-photorec` flags.
@@ -204,12 +213,16 @@ Always run the metadata-first path (TSK index → wallet/picture detection) befo
 |----------|----------|---------|-------------|
 | `TTYD_PASSWORD` | **yes** | — | Password for the browser terminal |
 | `TTYD_USER` | no | `admin` | Username for the browser terminal |
-| `TTYD_PORT` | no | `7681` | Container port for the browser terminal |
+| `UI_PORT` | no | `7788` | Host-side UI port in docker compose |
+| `TTYD_INTERNAL_PORT` | no | `17681` | Internal localhost-only ttyd port used behind `/terminal/` |
 | `TTYD_CMD` | no | `cd /root/hdd-recovery && exec bin/tui.sh` | Command the terminal runs on each new connection |
-| `WEB_PORT` | no | `7788` | Container port for the read-only web review UI |
-| `HEALTH_PORT` | no | `8080` | Container port for the health/status API |
-| `OLLAMA_HOST` | no | `http://host-gateway:11434` | Ollama API URL (running on the Docker host) |
-| `DATA_ROOT` | no | `/mnt/BigDisk/CryptoBackup` | Host path mapped to `/mnt/recovery16tb` in docker-compose |
+| `WEB_INTERNAL_PORT` | no | `17788` | Internal localhost-only `image-serve.py` port |
+| `IMAGE_ROOT` | no | `/data/images` | Container path for raw ddrescue images |
+| `DB_ROOT` | no | `/data/db` | Container path for per-image SQLite catalogs |
+| `EXPORT_ROOT` | no | `/data/exports` | Container path for recovered files and reports |
+| `LOG_ROOT` | no | `/data/logs` | Container path for ddrescue maps and stage logs |
+| `OLLAMA_HOST` | no | `http://host-gateway:11434` | Primary remote Ollama API URL |
+| `OLLAMA_HOSTS` | no | — | Comma-separated Ollama API URLs for parallel image tagging |
 
 ---
 
@@ -229,22 +242,22 @@ Always run the metadata-first path (TSK index → wallet/picture detection) befo
 | **File identification/review** | `TrID`, `imagehash`, Pillow quality scoring |
 | **Windows memory** | `Volatility3` |
 | **Full-text index** | `recoll` (opt-in via `ENABLE_RECOLL=1`) |
-| **Terminal UI** | Python Textual app, served via `ttyd` |
-| **Web review UI** | Read-only dashboard, artifact browser, galleries, timeline, and SQL query UI on `WEB_PORT` |
-| **Process manager** | Go supervisor (manages ttyd, serves health API) |
+| **Terminal UI** | Python Textual app, served via `ttyd` under `/terminal/` |
+| **Web review UI** | Read-only dashboard, artifact browser, galleries, timeline, and SQL query UI at `/` |
+| **Process manager** | Go supervisor (single public UI port, internal ttyd/web backends, health/status endpoints) |
 
 > **Cracking GPU setup:** hashcat stages require NVIDIA Container Toolkit and a container started with GPU access, for example `--gpus all`. The helper in `lib/gpu_check.sh` runs `hashcat -I` and hard-fails if no NVIDIA GPU is visible. This prevents silent CPU fallback, which can waste days.
 
 ---
 
-## Health API
+## Health and Status
 
-The Go supervisor exposes a small HTTP API on port `8080` (configurable via `HEALTH_PORT`):
+The Go supervisor exposes health and status on the same UI port:
 
 ```
 GET /health
   200  {"ok":true}
-  503  {"ok":false,"error":"ttyd not running"}
+  503  {"ok":false,"error":"ui backend not running"}
 
 GET /status
   200  {
@@ -255,22 +268,27 @@ GET /status
          "started_at":  "2026-04-24T09:00:00Z",
          "uptime_s":    3600,
          "ollama_host": "http://host-gateway:11434",
+         "ollama_hosts": ["http://host-gateway:11434"],
          "ollama_ok":   true,
          "ollama_msg":  "reachable"
        }
 ```
 
-`GET /` redirects to `/health` (HTTP 302) so TrueNAS health probes that hit the root path also work.
-
-The supervisor restarts ttyd automatically on crash (up to 20 times, with a 5-second backoff). It tests Ollama connectivity at startup and reports it in `/status`.
+The supervisor restarts ttyd and the review UI automatically on crash (up to 20 times, with a 5-second backoff). It tests configured Ollama endpoint connectivity at startup and reports it in `/status`.
 
 ---
 
 ## Ollama integration
 
-If [Ollama](https://ollama.com) is running on the TrueNAS host, the container reaches it via `http://host-gateway:11434` — Docker's built-in alias for the host IP. This is already the default value of `OLLAMA_HOST`.
+If [Ollama](https://ollama.com) is running on the TrueNAS host, the container can reach it via `http://host-gateway:11434` where Docker supports the host-gateway alias. For remote LAN Ollama servers, set `OLLAMA_HOST=http://192.168.x.x:11434`.
 
-The supervisor tests Ollama at startup and reports the result in `GET /status`. LLM-assisted analysis (vision models for ambiguous seed-phrase images, text summarization) is available as an opt-in stage.
+For multiple Ollama workers, set:
+
+```bash
+OLLAMA_HOSTS=http://ollama-a:11434,http://ollama-b:11434
+```
+
+`bin/image-tag-photos.py` accepts the same comma-separated list via `--ollama` and defaults its worker count to the number of configured endpoints.
 
 ---
 
@@ -304,26 +322,24 @@ docker buildx build \
 
 ## Data layout
 
-The container expects the following structure inside the mounted volume (`/mnt/recovery16tb`). This layout is created automatically when you run `bin/image-analysis-init.sh`.
+The container uses four independent roots. Mount them to storage with the right performance profile:
 
 ```
-/mnt/recovery16tb/
-└── recovery/
-    ├── images/                 disk image files (*.img) and SQLite databases
-    │   ├── disk.img
-    │   └── disk.img.analysis.sqlite
-    ├── exports/
-    │   └── <image-name>/       per-image analysis outputs
-    │       ├── structure/      fdisk / parted / mmls / blkid outputs
-    │       ├── recovered/      carved and recovered files by method
-    │       ├── indexes/        bulk_extractor output, TSK index
-    │       ├── hits/           wallet candidates, OCR seed hits
-    │       ├── logs/           per-stage log files
-    │       └── reports/        generated summary reports
-    └── logs/                   ddrescue map files and rate logs
+/data/images/                  raw disk image files (*.img)
+  disk.img
+/data/db/                      SQLite catalogs on fast storage
+  disk.img.analysis.sqlite
+/data/exports/<image-name>/    per-image analysis outputs
+  structure/                   fdisk / parted / mmls / blkid outputs
+  recovered/                   carved and recovered files by method
+  indexes/                     bulk_extractor output, TSK index
+  hits/                        wallet candidates, OCR seed hits
+  logs/                        per-stage log files
+  reports/                     generated summary reports
+/data/logs/                    ddrescue map files and rate logs
 ```
 
-Each image's SQLite database lives beside the image file as `<image>.analysis.sqlite` and contains:
+For `disk.img`, the default SQLite path is `/data/db/disk.img.analysis.sqlite`. The database records the raw image path and export root in `image_info`.
 
 | Table | Contents |
 |-------|----------|
@@ -342,10 +358,10 @@ Each image's SQLite database lives beside the image file as `<image>.analysis.sq
 
 ## Security notes
 
-- The browser terminal requires a password set via `TTYD_PASSWORD`. Use a strong password if TrueNAS is reachable from outside your LAN.
-- Consider a reverse proxy with TLS in front of port `7681` for remote access. TrueNAS has a built-in Nginx reverse proxy that can be configured per app.
+- The browser terminal under `/terminal/` requires a password set via `TTYD_PASSWORD`. Use a strong password even on a LAN.
+- Treat the unified UI as LAN-only. If you expose it beyond the LAN, put a real reverse proxy with TLS and authentication in front of port `7788`.
 - The container does not require `--privileged` or any special Linux capabilities. It reads image files exclusively via the volume mount.
-- The health API on port `8080` is unauthenticated. Restrict it to your LAN or bind it to a local interface if needed.
+- `/health` and `/status` are unauthenticated and intended for LAN health probes.
 
 ---
 

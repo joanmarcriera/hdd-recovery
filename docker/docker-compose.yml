@@ -10,12 +10,8 @@ services:
       dockerfile: docker/Dockerfile
 
     ports:
-      # Browser terminal (ttyd) — open in any browser
-      - "${TTYD_PORT:-7681}:7681"
-      # Read-only web query UI (image-serve.py) — start it from the TUI Web Server screen
-      - "${WEB_PORT:-7788}:7788"
-      # Supervisor health/status API — used by TrueNAS health probe
-      - "${HEALTH_PORT:-8080}:8080"
+      # Unified UI: review pages, /terminal/, /health, /status
+      - "${UI_PORT:-7788}:7788"
 
     environment:
       # REQUIRED: password for the browser terminal
@@ -28,25 +24,41 @@ services:
       # Default launches the TUI. Change to 'bash' for a plain shell.
       TTYD_CMD: "${TTYD_CMD:-cd /root/hdd-recovery && exec bin/tui.sh}"
 
-      # Ollama API endpoint (running on the TrueNAS host).
-      # host-gateway resolves to the Docker host IP automatically.
+      # Storage roots. Mount each one to a TrueNAS dataset with the right
+      # performance/capacity profile.
+      IMAGE_ROOT: "${IMAGE_ROOT:-/data/images}"
+      DB_ROOT: "${DB_ROOT:-/data/db}"
+      EXPORT_ROOT: "${EXPORT_ROOT:-/data/exports}"
+      LOG_ROOT: "${LOG_ROOT:-/data/logs}"
+      WEB_ROOT: "${WEB_ROOT:-/data/db}"
+
+      # Ollama API endpoint(s), usually remote or on the TrueNAS host.
+      # For multiple instances, set OLLAMA_HOSTS to a comma-separated list.
       OLLAMA_HOST: "${OLLAMA_HOST:-http://host-gateway:11434}"
+      OLLAMA_HOSTS: "${OLLAMA_HOSTS:-}"
 
     extra_hosts:
       # Allows the container to reach Ollama (or any service) on the TrueNAS host.
       - "host-gateway:host-gateway"
 
     volumes:
-      # Recovery data root: disk images, exports, logs, SQLite databases.
-      # Map your ZFS dataset here. Inside the container this is always
-      # /mnt/recovery16tb regardless of the host path.
-      - "${DATA_ROOT:-/mnt/BigDisk/CryptoBackup}:/mnt/recovery16tb:rw"
+      # Raw ddrescue disk images: large, mostly sequential I/O.
+      - "${IMAGE_ROOT_HOST:-/mnt/BigDisk/CryptoBackup/images}:/data/images:rw"
+
+      # SQLite catalogs: put this on fast low-latency storage such as NVMe.
+      - "${DB_ROOT_HOST:-/mnt/FastPool/hdd-recovery-db}:/data/db:rw"
+
+      # Recovered/carved files and generated exports: large capacity storage.
+      - "${EXPORT_ROOT_HOST:-/mnt/BigDisk/CryptoBackup/exports}:/data/exports:rw"
+
+      # ddrescue maps, rate logs, and stage logs.
+      - "${LOG_ROOT_HOST:-/mnt/BigDisk/CryptoBackup/logs}:/data/logs:rw"
 
       # Optional: persist per-disk ddrescue job configs across container restarts.
       # - "${JOBS_DIR:-/mnt/BigDisk/CryptoBackup/jobs}:/root/hdd-recovery/jobs:rw"
 
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-sf", "http://localhost:7788/health"]
       interval: 30s
       timeout: 5s
       retries: 3

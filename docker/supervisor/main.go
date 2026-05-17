@@ -1,10 +1,11 @@
 // hdd-supervisor: process manager for the hdd-forensics container.
 //
 // Responsibilities:
-//   - Start ttyd with password auth and restart it on crash
-//   - Start image-serve.py (read-only web UI) and restart it on crash
+//   - Start ttyd with password auth on a localhost-only backend
+//   - Start image-serve.py on a localhost-only backend
+//   - Serve one public UI port and proxy /terminal/ to ttyd
 //   - Serve GET /health and GET /status for TrueNAS health probes
-//   - Test Ollama connectivity at startup and report it in /status
+//   - Test configured Ollama connectivity at startup and report it in /status
 //   - Emit a startup banner with access info
 
 package main
@@ -16,40 +17,59 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
 
 const (
-	defaultTtydPort   = "7681"
-	defaultHealthPort = "8080"
-	defaultTtydUser   = "admin"
-	defaultWebPort    = "7788"
-	defaultWebHost    = "0.0.0.0"
-	defaultWebRoot    = "/mnt/recovery16tb/recovery"
-	webPIDFile        = "/tmp/hdd-recovery-webui.pid"
-	maxRestarts       = 20
-	restartBackoff    = 5 * time.Second
-	ollamaTimeout     = 5 * time.Second
+	defaultUIPort       = "7788"
+	defaultTtydPort     = "17681"
+	defaultTtydUser     = "admin"
+	defaultWebPort      = "17788"
+	defaultInternalHost = "127.0.0.1"
+	defaultWebRoot      = "/data/db"
+	terminalBasePath    = "/terminal/"
+	webPIDFile          = "/tmp/hdd-recovery-webui.pid"
+	maxRestarts         = 20
+	restartBackoff      = 5 * time.Second
+	ollamaTimeout       = 5 * time.Second
 )
+
+type supervisorConfig struct {
+	uiPort       string
+	ttydHost     string
+	ttydPort     string
+	ttydUser     string
+	ttydPassword string
+	ttydCmd      string
+	webHost      string
+	webPort      string
+	webRoot      string
+	ollamaHosts  []string
+}
 
 // State shared between goroutines and the HTTP handlers.
 type state struct {
-	mu          sync.RWMutex
-	ttydUp      bool
-	ttydPID     int
+	mu           sync.RWMutex
+	ttydUp       bool
+	ttydPID      int
 	ttydRestarts int
-	webUp       bool
-	webPID      int
-	webRestarts int
-	startedAt   time.Time
-	ollamaHost  string
-	ollamaOK    bool
-	ollamaMsg   string
+	webUp        bool
+	webPID       int
+	webRestarts  int
+	startedAt    time.Time
+	ollamaHost   string
+	ollamaHosts  []string
+	ollamaStatus map[string]string
+	ollamaOK     bool
+	ollamaMsg    string
 }
 
 var g state
@@ -57,42 +77,43 @@ var g state
 func main() {
 	g.startedAt = time.Now()
 
-	password := os.Getenv("TTYD_PASSWORD")
-	if password == "" {
+	cfg := loadConfig()
+	if cfg.ttydPassword == "" {
 		log.Fatal("TTYD_PASSWORD environment variable is required")
 	}
-
-	ttydPort  := envOr("TTYD_PORT",  defaultTtydPort)
-	ttydUser  := envOr("TTYD_USER",  defaultTtydUser)
-	healthPort := envOr("HEALTH_PORT", defaultHealthPort)
-	webPort   := envOr("WEB_PORT",   defaultWebPort)
-	webHost   := envOr("WEB_HOST",   defaultWebHost)
-	webRoot   := envOr("WEB_ROOT",   defaultWebRoot)
-	g.ollamaHost = envOr("OLLAMA_HOST", "")
-	ttydCmd   := envOr("TTYD_CMD", "/bin/bash -c 'cd /root/hdd-recovery && exec bin/tui.sh'")
-
-	if g.ollamaHost != "" {
-		probeOllama()
+	if len(cfg.ollamaHosts) > 0 && os.Getenv("OLLAMA_HOST") == "" {
+		_ = os.Setenv("OLLAMA_HOST", cfg.primaryOllamaHost())
 	}
 
-	printBanner(ttydPort, webPort, healthPort)
+	g.ollamaHost = cfg.primaryOllamaHost()
+	g.ollamaHosts = cfg.ollamaHosts
+	g.ollamaStatus = map[string]string{}
 
-	go runTtyd(ttydPort, ttydUser, password, ttydCmd)
-	go runWebUI(webHost, webPort, webRoot)
+	if len(cfg.ollamaHosts) > 0 {
+		probeOllamaHosts(cfg.ollamaHosts)
+	}
+
+	printBanner(cfg)
+
+	go runTtyd(cfg.ttydHost, cfg.ttydPort, cfg.ttydUser, cfg.ttydPassword, cfg.ttydCmd)
+	go runWebUI(cfg.webHost, cfg.webPort, cfg.webRoot)
+
+	terminalProxy := reverseProxy("http://" + cfg.ttydHost + ":" + cfg.ttydPort)
+	webProxy := reverseProxy("http://" + cfg.webHost + ":" + cfg.webPort)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("/status", handleStatus)
+	mux.HandleFunc("/terminal", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, terminalBasePath, http.StatusFound)
+	})
+	mux.Handle(terminalBasePath, terminalProxy)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			http.Redirect(w, r, "/health", http.StatusFound)
-			return
-		}
-		http.NotFound(w, r)
+		webProxy.ServeHTTP(w, r)
 	})
 
 	srv := &http.Server{
-		Addr:    ":" + healthPort,
+		Addr:    ":" + cfg.uiPort,
 		Handler: mux,
 	}
 
@@ -117,20 +138,22 @@ func main() {
 		os.Exit(0)
 	}()
 
-	log.Printf("Health/status API listening on :%s", healthPort)
+	log.Printf("Unified UI listening on :%s", cfg.uiPort)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("HTTP server failed: %v", err)
 	}
 }
 
 // runTtyd starts ttyd and restarts it on crash.
-func runTtyd(port, user, password, cmdStr string) {
+func runTtyd(host, port, user, password, cmdStr string) {
 	credential := fmt.Sprintf("%s:%s", user, password)
 	args := []string{
+		"--interface", host,
 		"--port", port,
 		"--credential", credential,
 		"--writable",
-		"bash", "-c", cmdStr,
+		"--base-path", terminalBasePath,
+		"bash", "-lc", cmdStr,
 	}
 
 	for {
@@ -149,7 +172,7 @@ func runTtyd(port, user, password, cmdStr string) {
 		g.ttydPID = cmd.Process.Pid
 		g.mu.Unlock()
 
-		log.Printf("[ttyd] started on port %s (pid %d)", port, cmd.Process.Pid)
+		log.Printf("[ttyd] started on %s:%s (pid %d)", host, port, cmd.Process.Pid)
 		_ = cmd.Wait()
 
 		g.mu.Lock()
@@ -218,27 +241,43 @@ func runWebUI(host, port, root string) {
 	}
 }
 
-// probeOllama tests whether the Ollama API is reachable.
-func probeOllama() {
+// probeOllamaHosts tests whether configured Ollama APIs are reachable.
+func probeOllamaHosts(hosts []string) {
+	primaryOK := false
+	primaryMsg := "not configured"
+	status := map[string]string{}
+	for i, host := range hosts {
+		ok, msg := probeOllamaHost(host)
+		status[host] = msg
+		if i == 0 {
+			primaryOK = ok
+			primaryMsg = msg
+		}
+	}
+	g.ollamaOK = primaryOK
+	g.ollamaMsg = primaryMsg
+	g.ollamaStatus = status
+}
+
+// probeOllamaHost tests whether one Ollama API is reachable.
+func probeOllamaHost(host string) (bool, string) {
 	client := &http.Client{Timeout: ollamaTimeout}
-	url := g.ollamaHost + "/api/tags"
-	resp, err := client.Get(url)
+	tagsURL := strings.TrimRight(host, "/") + "/api/tags"
+	resp, err := client.Get(tagsURL)
 	if err != nil {
-		g.ollamaOK = false
-		g.ollamaMsg = fmt.Sprintf("unreachable: %v", err)
-		log.Printf("[ollama] %s → %s", url, g.ollamaMsg)
-		return
+		msg := fmt.Sprintf("unreachable: %v", err)
+		log.Printf("[ollama] %s → %s", tagsURL, msg)
+		return false, msg
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	if resp.StatusCode == http.StatusOK {
-		g.ollamaOK = true
-		g.ollamaMsg = "reachable"
-		log.Printf("[ollama] %s → OK (%s)", url, body)
+		log.Printf("[ollama] %s → OK (%s)", tagsURL, body)
+		return true, "reachable"
 	} else {
-		g.ollamaOK = false
-		g.ollamaMsg = fmt.Sprintf("HTTP %d", resp.StatusCode)
-		log.Printf("[ollama] %s → %s", url, g.ollamaMsg)
+		msg := fmt.Sprintf("HTTP %d", resp.StatusCode)
+		log.Printf("[ollama] %s → %s", tagsURL, msg)
+		return false, msg
 	}
 }
 
@@ -246,7 +285,7 @@ func probeOllama() {
 
 func handleHealth(w http.ResponseWriter, _ *http.Request) {
 	g.mu.RLock()
-	up := g.ttydUp
+	up := g.ttydUp && g.webUp
 	g.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
@@ -255,25 +294,27 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 		_, _ = fmt.Fprintln(w, `{"ok":true}`)
 	} else {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = fmt.Fprintln(w, `{"ok":false,"error":"ttyd not running"}`)
+		_, _ = fmt.Fprintln(w, `{"ok":false,"error":"ui backend not running"}`)
 	}
 }
 
 func handleStatus(w http.ResponseWriter, _ *http.Request) {
 	g.mu.RLock()
 	payload := map[string]any{
-		"ok":            g.ttydUp,
-		"ttyd_up":       g.ttydUp,
-		"ttyd_pid":      g.ttydPID,
-		"ttyd_restarts": g.ttydRestarts,
-		"webui_up":      g.webUp,
-		"webui_pid":     g.webPID,
+		"ok":             g.ttydUp && g.webUp,
+		"ttyd_up":        g.ttydUp,
+		"ttyd_pid":       g.ttydPID,
+		"ttyd_restarts":  g.ttydRestarts,
+		"webui_up":       g.webUp,
+		"webui_pid":      g.webPID,
 		"webui_restarts": g.webRestarts,
-		"started_at":    g.startedAt.UTC().Format(time.RFC3339),
-		"uptime_s":      int(time.Since(g.startedAt).Seconds()),
-		"ollama_host":   g.ollamaHost,
-		"ollama_ok":     g.ollamaOK,
-		"ollama_msg":    g.ollamaMsg,
+		"started_at":     g.startedAt.UTC().Format(time.RFC3339),
+		"uptime_s":       int(time.Since(g.startedAt).Seconds()),
+		"ollama_host":    g.ollamaHost,
+		"ollama_hosts":   g.ollamaHosts,
+		"ollama_status":  g.ollamaStatus,
+		"ollama_ok":      g.ollamaOK,
+		"ollama_msg":     g.ollamaMsg,
 	}
 	g.mu.RUnlock()
 
@@ -285,6 +326,55 @@ func handleStatus(w http.ResponseWriter, _ *http.Request) {
 
 // Helpers ---------------------------------------------------------------------
 
+func loadConfig() supervisorConfig {
+	cfg := supervisorConfig{
+		uiPort:       envOr("UI_PORT", defaultUIPort),
+		ttydHost:     defaultInternalHost,
+		ttydPort:     envOr("TTYD_INTERNAL_PORT", defaultTtydPort),
+		ttydUser:     envOr("TTYD_USER", defaultTtydUser),
+		ttydPassword: os.Getenv("TTYD_PASSWORD"),
+		ttydCmd:      envOr("TTYD_CMD", "cd /root/hdd-recovery && exec bin/tui.sh"),
+		webHost:      defaultInternalHost,
+		webPort:      envOr("WEB_INTERNAL_PORT", defaultWebPort),
+		webRoot:      envOr("WEB_ROOT", envOr("DB_ROOT", defaultWebRoot)),
+		ollamaHosts:  parseOllamaHosts(),
+	}
+	return cfg
+}
+
+func (cfg supervisorConfig) primaryOllamaHost() string {
+	if len(cfg.ollamaHosts) == 0 {
+		return ""
+	}
+	return cfg.ollamaHosts[0]
+}
+
+func parseOllamaHosts() []string {
+	raw := os.Getenv("OLLAMA_HOSTS")
+	if raw == "" {
+		raw = os.Getenv("OLLAMA_HOST")
+	}
+	seen := map[string]bool{}
+	var hosts []string
+	for _, part := range strings.Split(raw, ",") {
+		host := strings.TrimSpace(part)
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		hosts = append(hosts, host)
+	}
+	return hosts
+}
+
+func reverseProxy(target string) *httputil.ReverseProxy {
+	u, err := url.Parse(target)
+	if err != nil {
+		log.Fatalf("invalid reverse proxy target %q: %v", target, err)
+	}
+	return httputil.NewSingleHostReverseProxy(u)
+}
+
 func envOr(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -292,23 +382,24 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-func printBanner(ttydPort, webPort, healthPort string) {
+func printBanner(cfg supervisorConfig) {
 	fmt.Printf(`
 ┌─────────────────────────────────────────────────────────────┐
 │              hdd-forensics  •  analysis container           │
 ├─────────────────────────────────────────────────────────────┤
-│  Terminal UI   →  http://<host>:%s                        │
-│  Web query UI  →  http://<host>:%s                        │
-│  Health API    →  http://<host>:%s/health                │
-│  Status API    →  http://<host>:%s/status                │
-`, ttydPort, webPort, healthPort, healthPort)
+│  Review UI     →  http://<host>:%s/                       │
+│  Terminal      →  http://<host>:%s/terminal/              │
+│  Health        →  http://<host>:%s/health                 │
+│  Status        →  http://<host>:%s/status                 │
+│  DB root       →  %-40s │
+`, cfg.uiPort, cfg.uiPort, cfg.uiPort, cfg.uiPort, cfg.webRoot)
 
-	if g.ollamaHost != "" {
-		status := "✗ unreachable"
-		if g.ollamaOK {
-			status = "✓ reachable"
+	for _, host := range g.ollamaHosts {
+		status := g.ollamaStatus[host]
+		if status == "" {
+			status = "not probed"
 		}
-		fmt.Printf("│  Ollama        →  %-40s │\n", g.ollamaHost+" "+status)
+		fmt.Printf("│  Ollama        →  %-40s │\n", host+" "+status)
 	}
 
 	fmt.Println("└─────────────────────────────────────────────────────────────┘")

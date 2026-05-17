@@ -15,7 +15,7 @@ from config import BIN_DIR
 from stages import StageDef
 from state import DiskInfo
 
-_DEFAULT_OLLAMA = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+_DEFAULT_OLLAMA = os.environ.get("OLLAMA_HOSTS") or os.environ.get("OLLAMA_HOST", "http://localhost:11434")
 _DEFAULT_MODEL = "llava:7b"
 _SCOPES = [("real — JPEG ≥ 20 KB (default)", "real"), ("all — any image/* ≥ 10 KB", "all")]
 
@@ -77,8 +77,11 @@ class TagPhotosScreen(ModalScreen[list[str] | None]):
             yield Label(f"Stage {self.stage.number}: {self.stage.name}", id="title")
 
             with Horizontal(classes="row"):
-                yield Label("Ollama URL", classes="lbl")
+                yield Label("Ollama URLs", classes="lbl")
                 yield Input(value=_DEFAULT_OLLAMA, id="ollama")
+            with Horizontal(classes="row"):
+                yield Label("Workers", classes="lbl")
+                yield Input(value="", placeholder="auto", id="workers")
             with Horizontal(classes="row"):
                 yield Label("Model", classes="lbl")
                 yield Input(value=_DEFAULT_MODEL, id="model")
@@ -107,6 +110,7 @@ class TagPhotosScreen(ModalScreen[list[str] | None]):
         db = str(self.disk.db_path)
         ollama = self.query_one("#ollama", Input).value.strip()
         model = self.query_one("#model", Input).value.strip()
+        workers = self.query_one("#workers", Input).value.strip()
         scope = self.query_one("#scope", Select).value
         force = self.query_one("#force", Checkbox).value
         dry_run = self.query_one("#dry-run", Checkbox).value
@@ -116,6 +120,8 @@ class TagPhotosScreen(ModalScreen[list[str] | None]):
             cmd += ["--ollama", ollama]
         if model and model != _DEFAULT_MODEL:
             cmd += ["--model", model]
+        if workers:
+            cmd += ["--workers", workers]
         if scope and scope != "real":
             cmd += ["--scope", str(scope)]
         if force:

@@ -26,7 +26,7 @@ Usage:
 Arguments:
   image-file         Full path to the .img file on this machine
   truenas-host       SSH hostname or IP of the TrueNAS box
-  remote-data-root   Dataset path on TrueNAS (default: /mnt/BigDisk/CryptoBackup)
+  remote-data-root   Parent dataset on TrueNAS (default: /mnt/BigDisk/CryptoBackup)
 EOF
 }
 
@@ -38,6 +38,10 @@ remote_root="${3:-/mnt/BigDisk/CryptoBackup}"
 [[ -f "$image" ]] || die "image file not found: $image"
 
 db="$(default_db_path "$image")"
+legacy_db="${image}${DB_SUFFIX:-.analysis.sqlite}"
+if [[ ! -f "$db" && -f "$legacy_db" ]]; then
+  db="$legacy_db"
+fi
 image_name="$(image_name "$image")"
 image_base="$(image_basename "$image")"
 export_root="$(default_export_root "$image")"
@@ -61,9 +65,10 @@ else
 fi
 
 # ── 2. Build the list of things to transfer ───────────────────────────────────
-remote_images_dir="$remote_root/recovery/images"
-remote_exports_dir="$remote_root/recovery/exports"
-remote_logs_dir="$remote_root/recovery/logs"
+remote_images_dir="$remote_root/images"
+remote_db_dir="$remote_root/db"
+remote_exports_dir="$remote_root/exports"
+remote_logs_dir="$remote_root/logs"
 
 log "Preparing transfer to $truenas_host"
 log "  image   : $image"
@@ -73,7 +78,7 @@ log "  logs    : ${logs_dir}/${image_base}.*"
 log ""
 
 # ── 3. Create remote directories ─────────────────────────────────────────────
-ssh "$truenas_host" "mkdir -p '$remote_images_dir' '$remote_exports_dir' '$remote_logs_dir'"
+ssh "$truenas_host" "mkdir -p '$remote_images_dir' '$remote_db_dir' '$remote_exports_dir' '$remote_logs_dir'"
 
 # ── 4. Transfer image file ────────────────────────────────────────────────────
 log "Transferring image file (this may take a long time)..."
@@ -85,7 +90,7 @@ rsync -avz --progress \
 # ── 5. Transfer SQLite database ───────────────────────────────────────────────
 if [[ -f "$db" ]]; then
   log "Transferring analysis database..."
-  rsync -avz "$db" "${truenas_host}:${remote_images_dir}/"
+  rsync -avz "$db" "${truenas_host}:${remote_db_dir}/"
 else
   log "No analysis database found — run image-analysis-init.sh and image-structure-scan.sh first"
 fi
@@ -107,12 +112,13 @@ else
 fi
 
 # ── 8. Done — print next steps ────────────────────────────────────────────────
-remote_db="${remote_images_dir}/${image_name}.analysis.sqlite"
+container_db="/data/db/${image_name}${DB_SUFFIX:-.analysis.sqlite}"
 
 printf '\n'
 log "Transfer complete. Next steps on TrueNAS:"
 printf '
-  1. Open the browser terminal: http://%s:7681
+  1. Open the review UI: http://%s:7788/
+     Open the browser terminal: http://%s:7788/terminal/
   2. Or run analysis directly:
 
      docker exec -it hdd-forensics bash -c "
@@ -129,4 +135,4 @@ printf '
        bin/image-report.sh \$DB
      "
 
-' "$truenas_host" "$remote_db"
+' "$truenas_host" "$truenas_host" "$container_db"

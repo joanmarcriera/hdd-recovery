@@ -5,7 +5,7 @@
 # High-confidence hits go to wallet_candidates and notes.
 set -Eeuo pipefail
 
-ROOT_DIR="/root/hdd-recovery"
+ROOT_DIR="${HDD_RECOVERY_ROOT:-/root/hdd-recovery}"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/lib/common.sh"
 

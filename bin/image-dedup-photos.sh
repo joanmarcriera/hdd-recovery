@@ -3,7 +3,7 @@
 # recovered_artifacts metadata and findings; it never deletes or moves files.
 set -Eeuo pipefail
 
-ROOT_DIR="/root/hdd-recovery"
+ROOT_DIR="${HDD_RECOVERY_ROOT:-/root/hdd-recovery}"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/lib/common.sh"
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT_DIR="/root/hdd-recovery"
+ROOT_DIR="${HDD_RECOVERY_ROOT:-/root/hdd-recovery}"
 
 usage() {
   cat <<'EOF'

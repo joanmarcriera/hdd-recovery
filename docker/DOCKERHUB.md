@@ -11,10 +11,10 @@ A self-contained Docker container for hard-disk image forensics, focused on reco
 - Deleted file recovery for ext3/4 (**extundelete**, **ext4magic**), NTFS, FAT, XFS, and Btrfs
 - OCR via **Tesseract** with BIP-39 seed-word detection across all recovered images
 - Per-image **SQLite** database tracking every stage: what ran, when, what it found
-- Interactive **TUI** (Python Textual) served at `http://host:7681` — no SSH required
-- Read-only **review UI** served at `http://host:7788` for dashboards, recovered artifacts, galleries, timeline, and SQL queries
-- Go supervisor manages ttyd, auto-restarts on crash, exposes `/health` and `/status` on port `8080`
-- **Ollama** integration: reaches a local Ollama instance via `OLLAMA_HOST`
+- Single browser UI at `http://host:7788/`: review dashboard at `/`, terminal TUI at `/terminal/`, health/status at `/health` and `/status`
+- Separate mount roots for raw images, SQLite databases, recovered exports, and logs
+- Go supervisor manages ttyd and the review UI, auto-restarts both on crash, and reports Ollama status
+- **Ollama** integration: reaches one or more remote Ollama instances via `OLLAMA_HOST` or `OLLAMA_HOSTS`
 
 ## Quick start — TrueNAS SCALE Custom App
 
@@ -23,9 +23,13 @@ A self-contained Docker container for hard-disk image forensics, focused on reco
 3. Add environment variables:
    - `TTYD_PASSWORD` = your password (required)
    - `OLLAMA_HOST` = `http://host-gateway:11434`
-4. Add a host path volume: host `/mnt/BigDisk/CryptoBackup` → container `/mnt/recovery16tb`
-5. Add port forwards: `7681:7681` (TUI), `7788:7788` (review UI), and `8080:8080` (health)
-6. Click **Install**, then open `http://truenas-ip:7681` for the TUI or `http://truenas-ip:7788` for the review UI
+4. Add four host path volumes:
+   - `/mnt/BigDisk/CryptoBackup/images` → `/data/images`
+   - `/mnt/FastPool/hdd-recovery-db` → `/data/db`
+   - `/mnt/BigDisk/CryptoBackup/exports` → `/data/exports`
+   - `/mnt/BigDisk/CryptoBackup/logs` → `/data/logs`
+5. Add one port forward: host `7788` → container `7788`
+6. Click **Install**, then open `http://truenas-ip:7788/` for the review UI or `http://truenas-ip:7788/terminal/` for the TUI
 
 ## Quick start — docker run
 
@@ -33,11 +37,18 @@ A self-contained Docker container for hard-disk image forensics, focused on reco
 docker run -d \
   --name hdd-forensics \
   --restart unless-stopped \
-  -p 7681:7681 -p 7788:7788 -p 8080:8080 \
+  -p 7788:7788 \
   -e TTYD_PASSWORD=yourpassword \
   -e OLLAMA_HOST=http://host-gateway:11434 \
+  -e IMAGE_ROOT=/data/images \
+  -e DB_ROOT=/data/db \
+  -e EXPORT_ROOT=/data/exports \
+  -e LOG_ROOT=/data/logs \
   --add-host host-gateway:host-gateway \
-  -v /mnt/BigDisk/CryptoBackup:/mnt/recovery16tb \
+  -v /mnt/BigDisk/CryptoBackup/images:/data/images \
+  -v /mnt/FastPool/hdd-recovery-db:/data/db \
+  -v /mnt/BigDisk/CryptoBackup/exports:/data/exports \
+  -v /mnt/BigDisk/CryptoBackup/logs:/data/logs \
   joanmarcriera/hdd-forensics:latest
 ```
 
@@ -47,24 +58,24 @@ docker run -d \
 |----------|----------|---------|-------------|
 | `TTYD_PASSWORD` | **yes** | — | Password for the browser terminal |
 | `TTYD_USER` | no | `admin` | Username for the browser terminal |
-| `TTYD_PORT` | no | `7681` | Browser terminal port |
-| `WEB_PORT` | no | `7788` | Read-only review UI port |
-| `HEALTH_PORT` | no | `8080` | Health/status API port |
-| `OLLAMA_HOST` | no | `http://host-gateway:11434` | Ollama API URL on the Docker host |
+| `IMAGE_ROOT` | no | `/data/images` | Raw ddrescue image path |
+| `DB_ROOT` | no | `/data/db` | SQLite database path |
+| `EXPORT_ROOT` | no | `/data/exports` | Recovered outputs path |
+| `LOG_ROOT` | no | `/data/logs` | Logs and ddrescue maps path |
+| `OLLAMA_HOST` | no | `http://host-gateway:11434` | Primary Ollama API URL |
+| `OLLAMA_HOSTS` | no | — | Comma-separated Ollama API URLs |
 
 ## Ports
 
 | Port | Service |
 |------|---------|
-| `7681` | ttyd browser terminal (TUI) |
-| `7788` | Read-only web review UI |
-| `8080` | Supervisor health API (`/health`, `/status`) |
+| `7788` | Unified UI, terminal, health, and status |
 
 ## Health API
 
 ```
-GET /health  →  200 {"ok":true} when ttyd is running, 503 otherwise
-GET /status  →  JSON with ttyd PID, restart count, uptime, Ollama status
+GET /health  →  200 {"ok":true} when UI backends are running, 503 otherwise
+GET /status  →  JSON with ttyd/web PIDs, restart counts, uptime, and Ollama status
 ```
 
 ## Full documentation

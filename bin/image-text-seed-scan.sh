@@ -2,7 +2,7 @@
 # Scan recovered text-like files for consecutive BIP39 seed word runs.
 set -Eeuo pipefail
 
-ROOT_DIR="/root/hdd-recovery"
+ROOT_DIR="${HDD_RECOVERY_ROOT:-/root/hdd-recovery}"
 # shellcheck disable=SC1091
 source "$ROOT_DIR/lib/common.sh"
 

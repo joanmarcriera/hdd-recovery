@@ -162,10 +162,8 @@ RUN mkdir -p /root/hdd-recovery/jobs
 
 WORKDIR /root/hdd-recovery
 
-# ── Ports ─────────────────────────────────────────────────────────────────────
-# 7681  ttyd — browser terminal
-# 7788  read-only web UI
-# 8080  supervisor health/status API
-EXPOSE 7681 7788 8080
+# ── Port ──────────────────────────────────────────────────────────────────────
+# 7788  unified web UI: review pages, /terminal/, /health, /status
+EXPOSE 7788
 
 ENTRYPOINT ["/usr/local/bin/hdd-supervisor"]

@@ -3,7 +3,7 @@ import os
 import subprocess
 from pathlib import Path
 
-ROOT_DIR = Path("/root/hdd-recovery")
+ROOT_DIR = Path(os.environ.get("HDD_RECOVERY_ROOT", "/root/hdd-recovery"))
 JOBS_DIR = ROOT_DIR / "jobs"
 BIN_DIR = ROOT_DIR / "bin"
 CONFIG_FILE = Path(os.environ.get("HDD_RECOVERY_CONFIG", str(ROOT_DIR / "config/analysis-pipeline.env")))
@@ -24,10 +24,11 @@ def _load_simple_env(path: Path) -> dict[str, str]:
 
 
 _env = _load_simple_env(CONFIG_FILE)
-IMAGE_ROOT = Path(_env.get("IMAGE_ROOT", "/mnt/recovery16tb/recovery/images"))
-EXPORT_ROOT = Path(_env.get("EXPORT_ROOT", "/mnt/recovery16tb/recovery/exports"))
-LOG_ROOT = Path(_env.get("LOG_ROOT", "/mnt/recovery16tb/recovery/logs"))
-DB_SUFFIX = _env.get("DB_SUFFIX", ".analysis.sqlite")
+IMAGE_ROOT = Path(os.environ.get("IMAGE_ROOT", _env.get("IMAGE_ROOT", "/data/images")))
+DB_ROOT = Path(os.environ.get("DB_ROOT", _env.get("DB_ROOT", "/data/db")))
+EXPORT_ROOT = Path(os.environ.get("EXPORT_ROOT", _env.get("EXPORT_ROOT", "/data/exports")))
+LOG_ROOT = Path(os.environ.get("LOG_ROOT", _env.get("LOG_ROOT", "/data/logs")))
+DB_SUFFIX = os.environ.get("DB_SUFFIX", _env.get("DB_SUFFIX", ".analysis.sqlite"))
 TEMPLATE_CONF = BIN_DIR / "ddrescue-job-template.conf"
 
 

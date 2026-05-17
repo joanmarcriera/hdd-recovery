@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-ROOT_DIR="/root/hdd-recovery"
+ROOT_DIR="${HDD_RECOVERY_ROOT:-/root/hdd-recovery}"
 CONFIG_FILE="${HDD_RECOVERY_CONFIG:-$ROOT_DIR/config/analysis-pipeline.env}"
 SCHEMA_FILE="$ROOT_DIR/sql/analysis-schema.sql"
 
@@ -42,7 +42,13 @@ image_basename() {
 }
 
 default_db_path() {
-  printf '%s%s\n' "$1" "${DB_SUFFIX:-.analysis.sqlite}"
+  local image="$1"
+  local suffix="${DB_SUFFIX:-.analysis.sqlite}"
+  if [[ -n "${DB_ROOT:-}" ]]; then
+    printf '%s/%s%s\n' "$DB_ROOT" "$(image_name "$image")" "$suffix"
+  else
+    printf '%s%s\n' "$image" "$suffix"
+  fi
 }
 
 default_export_root() {
