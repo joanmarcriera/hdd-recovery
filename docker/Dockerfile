@@ -162,6 +162,13 @@ RUN mkdir -p /root/hdd-recovery/jobs
 
 WORKDIR /root/hdd-recovery
 
+# ── Build version (surfaced in /status, the supervisor banner, and the web UI
+#    footer so a running container can be matched to a build) ──────────────────
+ARG APP_VERSION=dev
+ENV APP_VERSION=${APP_VERSION}
+LABEL org.opencontainers.image.version="${APP_VERSION}" \
+      org.opencontainers.image.source="https://github.com/joanmarcriera/hdd-recovery"
+
 # ── Port ──────────────────────────────────────────────────────────────────────
 # 7788  unified web UI: review pages, /terminal/, /health, /status
 EXPOSE 7788

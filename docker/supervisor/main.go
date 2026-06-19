@@ -292,6 +292,7 @@ func handleHealth(w http.ResponseWriter, _ *http.Request) {
 func handleStatus(w http.ResponseWriter, _ *http.Request) {
 	g.mu.RLock()
 	payload := map[string]any{
+		"version":        envOr("APP_VERSION", "dev"),
 		"ok":             g.ttydUp && g.webUp,
 		"ttyd_up":        g.ttydUp,
 		"ttyd_pid":       g.ttydPID,
@@ -395,12 +396,13 @@ func printBanner(cfg supervisorConfig) {
 ┌─────────────────────────────────────────────────────────────┐
 │              hdd-forensics  •  analysis container           │
 ├─────────────────────────────────────────────────────────────┤
+│  Build         →  %-40s │
 │  Review UI     →  http://<host>:%s/                       │
 │  Terminal      →  http://<host>:%s/terminal/              │
 │  Health        →  http://<host>:%s/health                 │
 │  Status        →  http://<host>:%s/status                 │
 │  DB root       →  %-40s │
-`, cfg.uiPort, cfg.uiPort, cfg.uiPort, cfg.uiPort, cfg.webRoot)
+`, envOr("APP_VERSION", "dev"), cfg.uiPort, cfg.uiPort, cfg.uiPort, cfg.uiPort, cfg.webRoot)
 
 	for _, host := range g.ollamaHosts {
 		status := g.ollamaStatus[host]

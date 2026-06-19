@@ -8,8 +8,8 @@ a given root directory.  All SQL executed is restricted to SELECT/WITH.
 Usage:
   image-serve.py [--root DIR] [--port PORT] [--host HOST]
 """
-import argparse, glob, html, http.server, importlib.util, io, json, mimetypes, os, re
-import shlex, sqlite3, subprocess, sys, threading, urllib.parse
+import argparse, glob, gzip, hashlib, html, http.server, importlib.util, io, json, mimetypes, os, re
+import shlex, sqlite3, subprocess, sys, tempfile, threading, time, urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -138,14 +138,19 @@ def badge(status):
            "running": "running", "error": "error"}.get(str(status).lower(), "pending")
     return f'<span class="badge {cls}">{h(status)}</span>'
 
+APP_VERSION = os.environ.get("APP_VERSION", "dev")
+
+
 def page(title, body, db_name="", nav_extra="", head_extra=""):
     home = '<a href="/">&#8962; home</a>'
     db_link = f' &rsaquo; <a href="/db?db={urllib.parse.quote(db_name)}">{h(Path(db_name).name)}</a>' if db_name else ""
     nav = f'<nav>{home}{db_link}{nav_extra}</nav>'
+    footer = (f'<footer style="margin-top:24px;color:var(--sub);font-size:11px">'
+              f'hdd-forensics &middot; build {h(APP_VERSION)}</footer>')
     return f"""<!DOCTYPE html><html><head><meta charset=utf-8>
 <title>{h(title)} &mdash; hdd-recovery</title>
 <style>{CSS}</style>{head_extra}</head><body>{nav}<h1>{h(title)}</h1>{body}
-<script>{SORT_JS}</script></body></html>"""
+{footer}<script>{SORT_JS}</script></body></html>"""
 
 def safe_sql(sql):
     stripped = sql.strip().lstrip(";").strip()
@@ -287,7 +292,51 @@ def mem_panel():
 
 # ── pages ─────────────────────────────────────────────────────────────────────
 
+def _home_db_stats(db_path):
+    """Fetch all homepage row fields for one DB over a single connection."""
+    stats = {"image_path": "?", "total_files": 0, "total_artifacts": 0,
+             "wallet_hits": 0, "last_run": "—", "map_path": ""}
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except Exception:
+        return stats
+    try:
+        def scalar(sql, default):
+            try:
+                row = conn.execute(sql).fetchone()
+                return row[0] if row and row[0] is not None else default
+            except Exception:
+                return default
+        try:
+            info = conn.execute(
+                "SELECT image_path, ddrescue_map_path FROM image_info WHERE id=1"
+            ).fetchone()
+        except Exception:
+            info = None
+        if info:
+            stats["image_path"] = info[0] or "?"
+            stats["map_path"] = info[1] or ""
+        stats["total_files"] = scalar("SELECT COUNT(*) FROM files", 0)
+        stats["total_artifacts"] = scalar("SELECT COUNT(*) FROM recovered_artifacts", 0)
+        stats["wallet_hits"] = scalar("SELECT COUNT(*) FROM wallet_candidates", 0)
+        stats["last_run"] = scalar(
+            "SELECT MAX(COALESCE(ended_at, started_at)) FROM scan_runs", "—")
+    finally:
+        conn.close()
+    return stats
+
+
+# Short-lived cache so rapid reloads / the 20 s pipeline meta-refresh do not
+# re-scan every DB and re-run pgrep each time.
+_HOME_CACHE: dict[str, tuple[float, str]] = {}
+_HOME_CACHE_TTL = 5.0
+
+
 def page_home(root):
+    cached = _HOME_CACHE.get(root)
+    if cached and (time.monotonic() - cached[0]) < _HOME_CACHE_TTL:
+        return cached[1]
+
     dbs = find_databases(root)
     if not dbs:
         body = f'<div class="panel"><p>No *.analysis.sqlite files found under <code>{h(root)}</code>.</p></div>'
@@ -297,13 +346,9 @@ def page_home(root):
     for db_path in dbs:
         name = Path(db_path).name
         size_mb = os.path.getsize(db_path) / 1e6
-        image_path = query_scalar(db_path, "SELECT image_path FROM image_info WHERE id=1") or "?"
-        total_files = query_scalar(db_path, "SELECT COUNT(*) FROM files") or 0
-        total_artifacts = query_scalar(db_path, "SELECT COUNT(*) FROM recovered_artifacts") or 0
-        wallet_hits = query_scalar(db_path, "SELECT COUNT(*) FROM wallet_candidates") or 0
-        last_run = query_scalar(db_path,
-            "SELECT MAX(COALESCE(ended_at, started_at)) FROM scan_runs") or "—"
-        map_p = query_scalar(db_path, "SELECT ddrescue_map_path FROM image_info WHERE id=1") or ""
+        st = _home_db_stats(db_path)
+        image_path = st["image_path"]
+        map_p = st["map_path"]
         enc = urllib.parse.quote(db_path)
         map_cell = (f'<a href="/mapview?db={enc}">&#128209;</a>'
                     if map_p and os.path.isfile(map_p) else "—")
@@ -312,17 +357,18 @@ def page_home(root):
           <td><a href="{link}">{h(name)}</a></td>
           <td class="mono">{h(Path(image_path).name)}</td>
           <td>{size_mb:.1f} MB</td>
-          <td>{total_files:,}</td>
-          <td>{total_artifacts:,}</td>
-          <td>{wallet_hits:,}</td>
-          <td>{h(str(last_run)[:19])}</td>
+          <td>{st["total_files"]:,}</td>
+          <td>{st["total_artifacts"]:,}</td>
+          <td>{st["wallet_hits"]:,}</td>
+          <td>{h(str(st["last_run"])[:19])}</td>
           <td style="text-align:center">{map_cell}</td>
         </tr>"""
 
-    # Active pipeline banner
+    # Active pipeline banner — one pgrep shared across all DBs.
     pipeline_banner = ""
+    pgrep_lines = _pipeline_pgrep_lines()
     for db_path in dbs:
-        pid, log_path = pipeline_active_for(db_path)
+        pid, log_path = pipeline_active_for(db_path, lines=pgrep_lines)
         if pid:
             enc2 = urllib.parse.quote(db_path)
             log_q = urllib.parse.quote(log_path) if log_path else ""
@@ -344,19 +390,31 @@ def page_home(root):
       </table>
     </div>"""
     head_extra = '<meta http-equiv="refresh" content="20">' if pipeline_banner else ""
-    return page("Recovery Dashboard", body, head_extra=head_extra)
+    html_out = page("Recovery Dashboard", body, head_extra=head_extra)
+    _HOME_CACHE[root] = (time.monotonic(), html_out)
+    return html_out
 
 
-def pipeline_active_for(db_path):
-    """Return (pid, log_path) of a running image-pipeline.py for this DB, or (None, None)."""
+def _pipeline_pgrep_lines():
+    """Run a single `pgrep -af image-pipeline.py` and return its output lines."""
     try:
         out = subprocess.run(
             ["pgrep", "-af", "image-pipeline.py"],
             capture_output=True, text=True, timeout=5
         )
+        return out.stdout.splitlines()
     except Exception:
-        return None, None
-    for line in out.stdout.splitlines():
+        return []
+
+
+def pipeline_active_for(db_path, lines=None):
+    """Return (pid, log_path) of a running image-pipeline.py for this DB, or (None, None).
+
+    Pass `lines` (from _pipeline_pgrep_lines) to avoid re-running pgrep per DB.
+    """
+    if lines is None:
+        lines = _pipeline_pgrep_lines()
+    for line in lines:
         parts = line.split(None, 1)
         if len(parts) != 2:
             continue
@@ -1102,7 +1160,7 @@ def page_findings(db_path, tool="", category="", limit=2000):
 
 def export_file_via_icat(db_path, file_id, root):
     """Idempotently extract a filesystem-aware file via image-export.sh.
-    Returns (bytes, mime) or (None, err). Skips re-extraction if dest already exists."""
+    Returns (abs_path, mime) or (None, err). Skips re-extraction if dest already exists."""
     try:
         fid = int(file_id)
     except (TypeError, ValueError):
@@ -1143,11 +1201,15 @@ def export_file_via_icat(db_path, file_id, root):
         if r.returncode != 0:
             return None, f"image-export.sh rc={r.returncode}: {r.stderr.strip()[:200]}"
 
-    return _safe_file_read(dest_path, root)
+    abs_path, err = _resolve_under_root(dest_path, root)
+    if abs_path is None:
+        return None, err
+    mime = mimetypes.guess_type(abs_path)[0] or "application/octet-stream"
+    return abs_path, mime
 
 
-def _safe_file_read(path, root):
-    """Read a file only if it resolves to a path inside root. Returns (bytes, mime) or (None, err)."""
+def _resolve_under_root(path, root):
+    """Return (abs_path, None) if path is a regular file inside root, else (None, err)."""
     try:
         abs_path = os.path.realpath(path)
         abs_root = os.path.realpath(root)
@@ -1155,11 +1217,63 @@ def _safe_file_read(path, root):
             return None, "Forbidden: path is outside the recovery root"
         if not os.path.isfile(abs_path):
             return None, "File not found"
-        mime = mimetypes.guess_type(abs_path)[0] or "application/octet-stream"
-        with open(abs_path, "rb") as f:
-            return f.read(), mime
+        return abs_path, None
     except OSError as e:
         return None, str(e)
+
+
+def _thumb_cache_dir():
+    """Writable directory for cached thumbnails. Override with HDD_THUMB_CACHE."""
+    d = os.environ.get("HDD_THUMB_CACHE") or os.path.join(
+        tempfile.gettempdir(), "hdd-thumb-cache")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def make_thumbnail(abs_path, max_w=320, max_h=240):
+    """Return (jpeg_bytes, etag) for a downscaled thumbnail of abs_path, cached on disk.
+
+    Returns (None, None) if Pillow is unavailable or the file is not a decodable image,
+    so callers can fall back to serving the original.
+    """
+    try:
+        st = os.stat(abs_path)
+    except OSError:
+        return None, None
+    key = hashlib.sha1(
+        f"{abs_path}|{st.st_mtime_ns}|{st.st_size}|{max_w}x{max_h}".encode()
+    ).hexdigest()
+    cache_path = os.path.join(_thumb_cache_dir(), key + ".jpg")
+    etag = f'"{key}"'
+    try:
+        if os.path.isfile(cache_path) and os.path.getsize(cache_path) > 0:
+            with open(cache_path, "rb") as fh:
+                return fh.read(), etag
+    except OSError:
+        pass
+    try:
+        from PIL import Image, ImageOps
+    except Exception:
+        return None, None
+    try:
+        with Image.open(abs_path) as im:
+            im = ImageOps.exif_transpose(im)
+            im.thumbnail((max_w, max_h))
+            if im.mode not in ("RGB", "L"):
+                im = im.convert("RGB")
+            buf = io.BytesIO()
+            im.save(buf, format="JPEG", quality=78, optimize=True)
+        data = buf.getvalue()
+    except Exception:
+        return None, None
+    try:  # write-then-rename so concurrent readers never see a partial file
+        tmp = cache_path + f".{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.replace(tmp, cache_path)
+    except OSError:
+        pass
+    return data, etag
 
 
 _FS_SORT_COLS = {
@@ -1269,7 +1383,7 @@ def page_gallery_fs(db_path, pg=0, per_page=48, all_images=False,
         imgs += (
             f'<div style="display:inline-block;text-align:center;vertical-align:top">'
             f'<a href="{url}" target="_blank" class="img-card" title="{h(meta)}">'
-            f'<img src="{url}" loading="lazy" '
+            f'<img src="{url}&thumb=1" loading="lazy" decoding="async" '
             f'style="width:150px;height:112px;object-fit:cover;border-radius:4px 4px 0 0;'
             f'border:1px solid #333;border-bottom:none;background:#111"></a>'
             f'<div style="width:150px;font-size:10px;color:var(--sub);background:#0d1117;'
@@ -1493,7 +1607,7 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
         imgs += (
             f'<div style="display:inline-block;text-align:center;vertical-align:top">'
             f'<a href="/file?path={fenc}" target="_blank" class="img-card" title="{h(tip)}">'
-            f'<img src="/file?path={fenc}" loading="lazy" '
+            f'<img src="/thumb?path={fenc}" loading="lazy" decoding="async" '
             f'style="width:150px;height:112px;object-fit:cover;border-radius:4px 4px 0 0;'
             f'border:1px solid #333;border-bottom:none;background:#111">'
             f'{desc_div}</a>'
@@ -1789,11 +1903,70 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def send_html(self, content, status=200):
         encoded = content.encode("utf-8")
+        gzipped = False
+        if "gzip" in self.headers.get("Accept-Encoding", "") and len(encoded) > 512:
+            encoded = gzip.compress(encoded, 5)
+            gzipped = True
         self.send_response(status)
         self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Vary", "Accept-Encoding")
+        if gzipped:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(encoded)))
         self.end_headers()
-        self.wfile.write(encoded)
+        if self.command != "HEAD":
+            self.wfile.write(encoded)
+
+    def send_bytes_cached(self, data, mime, etag, max_age=86400, extra_headers=None):
+        """Send an in-memory blob with ETag/Cache-Control, honouring If-None-Match (304)."""
+        if etag and self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", f"private, max-age={max_age}")
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", f"private, max-age={max_age}")
+        if etag:
+            self.send_header("ETag", etag)
+        for k, v in (extra_headers or {}).items():
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
+    def send_file_cached(self, abs_path, mime=None, max_age=86400):
+        """Stream a file from disk with ETag/Cache-Control, honouring If-None-Match (304)."""
+        try:
+            st = os.stat(abs_path)
+        except OSError as e:
+            self.send_html(page("Error", f'<p class="err">{h(str(e))}</p>'), 404)
+            return
+        etag = f'"{st.st_mtime_ns:x}-{st.st_size:x}"'
+        if self.headers.get("If-None-Match") == etag:
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Cache-Control", f"private, max-age={max_age}")
+            self.end_headers()
+            return
+        if mime is None:
+            mime = mimetypes.guess_type(abs_path)[0] or "application/octet-stream"
+        self.send_response(200)
+        self.send_header("Content-Type", mime)
+        self.send_header("Content-Length", str(st.st_size))
+        self.send_header("Cache-Control", f"private, max-age={max_age}")
+        self.send_header("ETag", etag)
+        self.end_headers()
+        if self.command == "HEAD":
+            return
+        with open(abs_path, "rb") as fh:
+            while True:
+                chunk = fh.read(65536)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
 
     def qs(self):
         parsed = urllib.parse.urlparse(self.path)
@@ -1858,16 +2031,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     map_path = query_scalar(db, "SELECT ddrescue_map_path FROM image_info WHERE id=1") or ""
                 self.send_html(page_mapview(map_path, db_path=db))
             elif p == "/file":
-                file_path = self.qsval("path")
-                data, mime_or_err = _safe_file_read(file_path, self.root)
-                if data is None:
-                    self.send_html(page("Error", f'<p class="err">{h(mime_or_err)}</p>'), 403)
+                abs_path, err = _resolve_under_root(self.qsval("path"), self.root)
+                if abs_path is None:
+                    self.send_html(page("Error", f'<p class="err">{h(err)}</p>'), 403)
                 else:
-                    self.send_response(200)
-                    self.send_header("Content-Type", mime_or_err)
-                    self.send_header("Content-Length", str(len(data)))
-                    self.end_headers()
-                    self.wfile.write(data)
+                    self.send_file_cached(abs_path)
+                return
+            elif p == "/thumb":
+                abs_path, err = _resolve_under_root(self.qsval("path"), self.root)
+                if abs_path is None:
+                    self.send_html(page("Error", f'<p class="err">{h(err)}</p>'), 403)
+                    return
+                data, etag = make_thumbnail(abs_path)
+                if data is None:
+                    # Not a decodable image (or Pillow missing) — serve the original.
+                    self.send_file_cached(abs_path)
+                else:
+                    self.send_bytes_cached(data, "image/jpeg", etag)
                 return
             elif p == "/gallery":
                 all_images = self.qsval("all") == "1"
@@ -1897,17 +2077,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                                 method_filter=self.qsval("method")))
             elif p == "/export_view":
                 file_id = self.qsval("file_id")
-                data, mime_or_err = export_file_via_icat(db, file_id, self.root)
-                if data is None:
+                abs_path, mime_or_err = export_file_via_icat(db, file_id, self.root)
+                if abs_path is None:
                     self.send_html(page("Error",
                         f'<p class="err">{h(mime_or_err)}</p>'), 500)
+                elif self.qsval("thumb") == "1":
+                    data, etag = make_thumbnail(abs_path)
+                    if data is None:
+                        self.send_file_cached(abs_path, mime_or_err)
+                    else:
+                        self.send_bytes_cached(data, "image/jpeg", etag)
                 else:
-                    self.send_response(200)
-                    self.send_header("Content-Type", mime_or_err)
-                    self.send_header("Content-Length", str(len(data)))
-                    self.send_header("Cache-Control", "private, max-age=300")
-                    self.end_headers()
-                    self.wfile.write(data)
+                    self.send_file_cached(abs_path, mime_or_err)
                 return
             elif p == "/pipeline_log":
                 log_path = self.qsval("log")

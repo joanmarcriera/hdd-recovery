@@ -26,6 +26,35 @@ RECOVERY_PROCS = (
     "recollindex", "image-",
 )
 
+# A single `pgrep` covers every recovery process. The SystemBar tick and its
+# per-disk liveness checks all consult the same process list, so cache it for a
+# few seconds instead of spawning one pgrep per disk per tick.
+import threading
+
+_PGREP_TTL = 3.0
+_PGREP_LOCK = threading.Lock()
+_PGREP_CACHE: dict[str, float | str] = {"ts": 0.0, "out": ""}
+
+
+def _recovery_pgrep() -> str:
+    """Return cached `pgrep -af` output for all recovery processes."""
+    now = time.monotonic()
+    with _PGREP_LOCK:
+        if now - float(_PGREP_CACHE["ts"]) < _PGREP_TTL:
+            return str(_PGREP_CACHE["out"])
+    try:
+        r = subprocess.run(
+            ["pgrep", "-af", "|".join(RECOVERY_PROCS)],
+            capture_output=True, text=True, timeout=3,
+        )
+        out = r.stdout
+    except Exception:
+        out = ""
+    with _PGREP_LOCK:
+        _PGREP_CACHE["ts"] = time.monotonic()
+        _PGREP_CACHE["out"] = out
+    return out
+
 
 # ---------------------------------------------------------------------------
 # Sampling helpers (all read-only, no side-effects)
@@ -180,11 +209,7 @@ def _running_proc_info(
 
     # Generic pgrep fallback when no disk context has been loaded yet.
     try:
-        r = subprocess.run(
-            ["pgrep", "-af", "|".join(RECOVERY_PROCS)],
-            capture_output=True, text=True, timeout=3,
-        )
-        for line in r.stdout.splitlines():
+        for line in _recovery_pgrep().splitlines():
             pid, _, cmd = line.partition(" ")
             cmd = cmd.strip()
             # skip monitor/watch processes
@@ -239,20 +264,14 @@ def _short_disk_name(disk: DiskInfo) -> str:
 
 
 def _pgrep_alive(disk: DiskInfo) -> bool:
-    try:
-        r = subprocess.run(
-            ["pgrep", "-fa", "|".join(RECOVERY_PROCS)],
-            capture_output=True, text=True, timeout=3,
-        )
-        needles = [
-            disk.basename,
-            str(disk.image_path),
-            str(disk.db_path),
-            str(disk.export_root),
-        ]
-        return any(n and n in r.stdout for n in needles)
-    except Exception:
-        return False
+    out = _recovery_pgrep()
+    needles = [
+        disk.basename,
+        str(disk.image_path),
+        str(disk.db_path),
+        str(disk.export_root),
+    ]
+    return any(n and n in out for n in needles)
 
 
 def _elapsed(started_at_utc: str) -> str:
@@ -324,7 +343,9 @@ class SystemBar(Widget):
         self._cpu.sample()              # prime CPU sampler so first delta is meaningful
         self._disk.sample([_DISK_DEV])  # prime disk sampler
         self._tick()
-        self.set_interval(2, self._tick)
+        # 4 s keeps CPU/I-O readouts responsive while roughly halving the
+        # per-tick subprocess + redraw churn pushed over the ttyd websocket.
+        self.set_interval(4, self._tick)
 
     @work(thread=True)
     def _tick(self) -> None:
