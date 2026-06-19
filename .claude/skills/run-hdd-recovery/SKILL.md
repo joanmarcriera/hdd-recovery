@@ -37,19 +37,22 @@ matters, then tears down (exit non-zero on any failure):
 python3 .claude/skills/run-hdd-recovery/driver.py smoke --port 7802
 ```
 
-Expected tail (23 checks, all `ok`):
+Expected tail (24 checks, all `ok`):
 
 ```
+  ok   discovery prunes exports/ (no decoy DB)
   ok   GET /queue → 200
-  ok   queue offers presets + start
-  ok   POST /queue empty → 400
   ...
   ok   traversal /etc/passwd → 403
   ok   survives client disconnect
   ok   no BrokenPipeError traceback in server log
 
-23 passed, 0 failed
+24 passed, 0 failed
 ```
+
+(`discovery prunes exports/` guards the fix for the slow recursive walk —
+`find_databases` must not descend into the huge `exports/` tree. The last two
+guard against a client disconnecting mid-response.)
 
 (The last two guard against a client disconnecting mid-response — browser
 refresh / reverse-proxy cancel — which must not crash the handler or spew a

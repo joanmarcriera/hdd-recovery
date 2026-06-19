@@ -142,6 +142,11 @@ def badge(status):
 
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
 
+# Hard cap for the gallery "View all" mode: emitting every <img> for a DB with
+# tens of thousands of carved images builds an enormous DOM and that many /thumb
+# requests. Show the first N and tell the user to paginate/filter for the rest.
+GALLERY_ALL_CAP = 1000
+
 
 def page(title, body, db_name="", nav_extra="", head_extra=""):
     home = '<a href="/">&#8962; home</a>'
@@ -208,18 +213,32 @@ def table_html(cols, rows, max_cell=300):
 
 # ── database discovery ────────────────────────────────────────────────────────
 
-def find_databases(root):
-    pattern = os.path.join(root, "**", "*.analysis.sqlite")
-    dbs = sorted(glob.glob(pattern, recursive=True))
-    # also top-level images dir
-    extra = sorted(glob.glob(os.path.join(root, "images", "*.analysis.sqlite")))
-    seen = set()
-    result = []
-    for d in dbs + extra:
-        if d not in seen:
-            seen.add(d)
-            result.append(d)
-    return result
+# Analysis DBs live beside images (e.g. <root>/images/*.analysis.sqlite). These
+# subdirectories never contain DBs but can hold millions of carved/feature files
+# — a recursive '**' glob over them took 20-40 s on a real export tree. Pruning
+# them (plus a depth cap) makes discovery effectively instant.
+_DISCOVERY_PRUNE = {
+    "exports", "recovered", "indexes", "winmem", "photorec", "carved",
+    "hits", "state", "reports", "logs", "manifests", "structure",
+}
+_DISCOVERY_MAX_DEPTH = 4
+
+
+def find_databases(root, max_depth=_DISCOVERY_MAX_DEPTH):
+    root = os.path.abspath(root)
+    base = root.rstrip(os.sep).count(os.sep)
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        depth = dirpath.count(os.sep) - base
+        if depth >= max_depth:
+            dirnames[:] = []
+        else:
+            dirnames[:] = [d for d in dirnames
+                           if d.lower() not in _DISCOVERY_PRUNE and not d.startswith(".")]
+        for fn in filenames:
+            if fn.endswith(".analysis.sqlite"):
+                found.append(os.path.join(dirpath, fn))
+    return sorted(set(found))
 
 # ── memory / swap status ─────────────────────────────────────────────────────
 
@@ -1626,7 +1645,7 @@ def page_gallery_fs(db_path, pg=0, per_page=48, all_images=False,
                     f"ORDER BY {order_sql}, f.path")
 
         if all_images:
-            rows = conn.execute(base_sql, params).fetchall()
+            rows = conn.execute(base_sql + f" LIMIT {GALLERY_ALL_CAP}", params).fetchall()
         else:
             offset = pg * per_page
             rows = conn.execute(base_sql + f" LIMIT {per_page} OFFSET {offset}",
@@ -1723,7 +1742,10 @@ def page_gallery_fs(db_path, pg=0, per_page=48, all_images=False,
 
     btn = 'style="background:#0f3460;padding:3px 12px;border-radius:3px;color:#7eb8f7"'
     if all_images:
-        header = f'<p class="count">{total:,} candidate(s) — all on one page</p>'
+        shown = min(total, GALLERY_ALL_CAP)
+        capped = (f' — showing first {GALLERY_ALL_CAP:,}; paginate or filter for the rest'
+                  if total > GALLERY_ALL_CAP else ' — all on one page')
+        header = f'<p class="count">{total:,} candidate(s){capped}</p>'
         toggle = f'<a href="/gallery?{qs_filter(all=None, page=None)}" {btn}>&#9660; Paginated view</a>'
         pager = ""
     else:
@@ -1853,7 +1875,7 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
         )
 
         if all_images:
-            rows = conn.execute(base_sql, params).fetchall()
+            rows = conn.execute(base_sql + f" LIMIT {GALLERY_ALL_CAP}", params).fetchall()
         else:
             offset = pg * per_page
             rows = conn.execute(base_sql + f" LIMIT {per_page} OFFSET {offset}",
@@ -1943,7 +1965,9 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
 
     btn = 'style="background:#0f3460;padding:3px 12px;border-radius:3px;color:#7eb8f7"'
     if all_images:
-        header = f'<p class="count">{total:,} image(s) — all on one page</p>'
+        capped = (f' — showing first {GALLERY_ALL_CAP:,}; paginate or filter for the rest'
+                  if total > GALLERY_ALL_CAP else ' — all on one page')
+        header = f'<p class="count">{total:,} image(s){capped}</p>'
         toggle = f'<a href="/gallery?{qs_filter(all=None, page=None)}" {btn}>&#9660; Paginated view</a>'
         pager = ""
     else:

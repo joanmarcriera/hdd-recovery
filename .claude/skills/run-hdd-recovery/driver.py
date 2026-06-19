@@ -59,6 +59,10 @@ def build_workspace(work: Path) -> tuple[str, Path]:
     for d in (img_root, carved):
         d.mkdir(parents=True, exist_ok=True)
 
+    # Decoy DB inside the (huge, pruned) exports tree: discovery must NOT walk
+    # exports/, so this must never appear on the dashboard.
+    (work / "exports" / "decoy.analysis.sqlite").write_bytes(b"")
+
     # A real, deliberately large-ish image so the thumbnail is visibly smaller.
     jpeg = carved / "00000001.jpg"
     Image.new("RGB", (1800, 1200), (40, 120, 90)).save(jpeg, "JPEG", quality=92)
@@ -167,6 +171,8 @@ def smoke(port: int, db_path: str, jpeg: Path, srv_log=None) -> int:
     check("home has Size + Stages columns", ">Size<" in home_txt and ">Stages<" in home_txt)
     check("home shows human image size", "298.1 GB" in home_txt, "image_size_bytes not rendered")
     check("home shows stage-group chips", 'class="chip' in home_txt and ">fast</span>" in home_txt)
+    check("discovery prunes exports/ (no decoy DB)",
+          "decoy" not in home_txt and "1 image(s)" in home_txt)
 
     # queue page: lists images + presets, has the start control
     st, hd, body = req(port, "/queue")
