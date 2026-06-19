@@ -37,9 +37,11 @@ matters, then tears down (exit non-zero on any failure):
 python3 .claude/skills/run-hdd-recovery/driver.py smoke --port 7802
 ```
 
-Expected tail (12 checks, all `ok`):
+Expected tail (14 checks, all `ok`):
 
 ```
+  ok   GET /db → 200
+  ok   db page shows seeded stages
   ok   gallery uses /thumb thumbnails
   ok   GET /thumb → 200 image/jpeg
   ok   thumb has ETag + Cache-Control
@@ -48,13 +50,18 @@ Expected tail (12 checks, all `ok`):
   ok   GET /file → 200 with ETag
   ok   traversal /etc/passwd → 403
 
-12 passed, 0 failed
+14 passed, 0 failed
 ```
 
 It checks: home renders (gzipped, lists the sample DB, shows the build footer),
-the gallery serves downscaled `/thumb` JPEGs instead of full-res originals,
-thumbnails carry `ETag`/`Cache-Control` and revalidate to `304`, `/file` is
-cached, and path traversal is blocked.
+the `/db` detail page renders the seeded `scan_runs` stage history, the gallery
+serves downscaled `/thumb` JPEGs instead of full-res originals, thumbnails carry
+`ETag`/`Cache-Control` and revalidate to `304`, `/file` is cached, and path
+traversal is blocked.
+
+The fixture (`build_workspace` in the driver) seeds `image_info.image_size_bytes`
+and a spread of `scan_runs` (`ok`/`partial`/`running`/`failed`) — useful data for
+work on the home dashboard's image-size and per-stage columns.
 
 To eyeball it in a browser instead, leave it serving against the sample data:
 
@@ -73,6 +80,29 @@ python3 bin/image-serve.py --root /path/to/db-root --host 127.0.0.1 --port 7799
 ```
 
 `APP_VERSION` (env) shows in the page footer and `/status`; default is `dev`.
+
+## Direct invocation (internals — no HTTP)
+
+Most page changes touch pure functions in `bin/image-serve.py` (`page_home`,
+`page_db`, `page_gallery`, `make_thumbnail`, …). You can build the fixture and
+call them directly — faster than the HTTP loop when iterating on rendering:
+
+```bash
+python3 - <<'PY'
+import importlib.util, tempfile, pathlib, shutil
+def load(n,p):
+    s=importlib.util.spec_from_file_location(n,p); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); return m
+drv = load("drv", ".claude/skills/run-hdd-recovery/driver.py")
+srv = load("imgserve", "bin/image-serve.py")
+work = pathlib.Path(tempfile.mkdtemp(prefix="hdd-di-"))
+db, jpeg = drv.build_workspace(work)          # the same sample DB the smoke test uses
+srv.Handler.root = str(work)
+print("page_home:", len(srv.page_home(str(work))), "chars")
+print("page_db has carve-scalpel:", "carve-scalpel" in srv.page_db(db))
+print("thumbnail bytes:", len(srv.make_thumbnail(str(jpeg))[0]))
+shutil.rmtree(work, ignore_errors=True)
+PY
+```
 
 ## Production container (not run by this skill)
 
@@ -103,10 +133,30 @@ container with `curl -s http://<host>:7788/status | grep version`.
 - **The TUI (`bin/tui.sh`) is not driven here** — it's a Textual app launched via
   `uv` and needs a real TTY (ttyd in production). Driving it headlessly is a
   separate tmux/`capture-pane` exercise.
+- **DBs bake in *absolute* paths from the acquisition machine.** Real-world DBs
+  store `image_info.export_root` / `recovered_artifacts.full_path` like
+  `/mnt/recovery16tb/recovery/exports/...`. For the gallery to resolve images in
+  the container, the data must be mounted at *that exact path* (not `/data/...`),
+  and `WEB_ROOT` must be the common ancestor of both `images/` and `exports/`
+  (e.g. `/mnt/recovery16tb/recovery`) — never the `images/` subdir alone, or the
+  carved files (under the sibling `exports/`) fall outside root and 403. Do **not**
+  rewrite the paths inside the DBs (evidence-preservation rule); fix the mount.
+- **Only one public port in the deployed image: `7788`.** The supervisor serves
+  the web UI at `/`, proxies ttyd at `/terminal/`, and exposes `/health` + `/status`.
+  ttyd (`127.0.0.1:17681`) and image-serve (`127.0.0.1:17788`) are loopback-only
+  behind it. Any other published host port (legacy `7681`/`8080` mappings) is dead.
+- **Build amd64 on a native amd64 host only.** Cross-building under QEMU on Apple
+  Silicon segfaults CPython during a Kali package's post-install
+  (`py3compile … status code -11`). Use a real amd64 box or the CI workflow.
 
 ## Troubleshooting
 
 - `FATAL: Pillow not installed` → install it (see Prerequisites).
+- **"No *.analysis.sqlite files found under /data/db"** (deployed) → `WEB_ROOT`
+  is empty/unset (falls back to `/data/db`) or the storage volume isn't mounted.
+  Set `WEB_ROOT` to the tree that contains `images/` + `exports/` and mount the
+  data there (see the path-mapping Gotcha). Check inside the container:
+  `echo "$WEB_ROOT"; find "$WEB_ROOT" -name '*.analysis.sqlite' | head`.
 - Gallery shows no thumbnails / `gallery uses /thumb` fails → a carved
   `full_path` is outside `--root` (see Gotchas); fix the layout or the root.
 - `address already in use` → pick another `--port`.

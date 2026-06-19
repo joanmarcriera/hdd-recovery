@@ -67,15 +67,27 @@ def build_workspace(work: Path) -> tuple[str, Path]:
 
     conn = sqlite3.connect(db_path)
     conn.executescript(SCHEMA.read_text())
+    # image_size_bytes is stored, not derived from the (placeholder) file — the
+    # home page should prefer it. Use a realistic raw-disk size.
     conn.execute(
         "INSERT INTO image_info (id,image_path,image_name,image_basename,"
-        "export_root,created_at,updated_at) VALUES (1,?,?,?,?,?,?)",
-        (str(image_path), "sample.img", "sample", str(export_root), _now(), _now()),
+        "image_size_bytes,export_root,created_at,updated_at) VALUES (1,?,?,?,?,?,?,?)",
+        (str(image_path), "sample.img", "sample", 320072933376,
+         str(export_root), _now(), _now()),
     )
-    conn.execute(
-        "INSERT INTO scan_runs (stage,status,started_at,ended_at) VALUES "
-        "('image-carve','ok',?,?)", (_now(), _now()),
-    )
+    # A spread of stages with varied status so the dashboard's stage column /
+    # badges have something realistic to render.
+    for stage, status in [
+        ("structure-scan", "ok"), ("index-tsk", "ok"),
+        ("detect-wallets", "ok"), ("detect-pictures", "partial"),
+        ("carve-foremost", "ok"), ("carve-scalpel", "running"),
+        ("bulk-extractor-raw", "failed"),
+    ]:
+        ended = None if status == "running" else _now()
+        conn.execute(
+            "INSERT INTO scan_runs (stage,status,started_at,ended_at) "
+            "VALUES (?,?,?,?)", (stage, status, _now(), ended),
+        )
     conn.execute(
         "INSERT INTO recovered_artifacts (method,relative_path,full_path,"
         "size_bytes,mime_type,created_at) VALUES "
@@ -149,6 +161,12 @@ def smoke(port: int, db_path: str, jpeg: Path) -> int:
     home_txt = _gz.decompress(body).decode("utf-8", "replace")
     check("home shows build footer", "build " in home_txt, "no footer")
     check("home lists sample DB", "sample.img.analysis.sqlite" in home_txt)
+
+    # DB detail page renders the stage history we seeded
+    st, hd, body = req(port, f"/db?db={enc_db}")
+    dbpage = body.decode("utf-8", "replace")
+    check("GET /db → 200", st == 200, f"status={st}")
+    check("db page shows seeded stages", "carve-foremost" in dbpage and "index-tsk" in dbpage)
 
     # gallery points <img> at /thumb, not full-res /file
     st, hd, body = req(port, f"/gallery?db={enc_db}")
