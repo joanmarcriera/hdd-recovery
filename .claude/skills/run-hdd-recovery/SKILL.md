@@ -101,6 +101,30 @@ Needs Chrome/Chromium (auto-detected: macOS `Google Chrome.app`, or
 / Stages columns with coloured stage-group chips; `queue.png` the preset
 checkboxes + image list.
 
+## Analysis pipeline (plan / dry-run)
+
+The other half of the project is the stage pipeline (`image-pipeline.py` →
+`bin/image-*.sh`, orchestrated for many images by `image-queue.py`). It's
+**dry-run unless `--run`**, so you can exercise stage resolution + `--skip-done`
+logic against the sample DB with no forensic toolchain:
+
+```bash
+python3 .claude/skills/run-hdd-recovery/driver.py plan --preset fast
+# → Plan: 4 stage(s) — structure-scan → index-tsk → detect-wallets → detect-pictures
+#   ... each stage 'preview  rc=0'
+```
+
+Executing stages for real (`--run`) needs the tools in the container image
+(sleuthkit `mmls`/`img_stat`, foremost, scalpel, bulk_extractor, …). To verify a
+stage *script* end-to-end, run it inside the image against a throwaway DB copy
+and check the exit code + recorded `scan_runs` status, e.g.:
+
+```bash
+docker run --rm -v /tmp/copy.analysis.sqlite:/data/t.analysis.sqlite \
+  --entrypoint bash joanmarcriera/hdd-forensics:latest -lc \
+  '/root/hdd-recovery/bin/image-structure-scan.sh /data/t.analysis.sqlite; echo rc=$?'
+```
+
 ## Test (Go supervisor)
 
 The container's process manager has its own Go tests:
@@ -187,6 +211,14 @@ container with `curl -s http://<host>:7788/status | grep version`.
 - **Build amd64 on a native amd64 host only.** Cross-building under QEMU on Apple
   Silicon segfaults CPython during a Kali package's post-install
   (`py3compile … status code -11`). Use a real amd64 box or the CI workflow.
+- **`--skip-done` only skips stages whose latest `scan_runs.status == "ok"`** —
+  not `partial`/`skipped`/`failed`. A stage that records a non-`ok` status is
+  re-run on every pipeline invocation. This bit `structure-scan`: it guards
+  against rebuilding partitions once `index-tsk` has linked files to them, and
+  historically recorded `skipped` + exited non-zero → the pipeline reported a
+  *permanent* `failed` every run. It now records `ok` + exits 0 (use `--force`
+  to rebuild). When touching a stage guard, a benign "already done" path must
+  record `ok` and exit 0, or it loops as a perpetual failure.
 
 ## Troubleshooting
 

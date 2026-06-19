@@ -14,6 +14,8 @@ Modes:
           so you can open it in a browser. Prints the URL.
   shot    launch and screenshot the visual surfaces (dashboard, gallery, queue)
           with headless Chrome into --out (default $TMPDIR/hdd-shots).
+  plan    dry-run the analysis pipeline (--preset) against the sample DB and
+          print the resolved stage plan — no server, no forensic toolchain.
 
 All modes print the workspace path. Requires: python3 + Pillow (PIL);
 `shot` additionally needs Chrome/Chromium.
@@ -281,14 +283,32 @@ def shot(port, db_path, outdir) -> int:
     return rc
 
 
+def plan(db_path, preset) -> int:
+    """Preview (dry-run) the analysis pipeline's stage plan for a preset.
+
+    image-pipeline.py is dry-run unless --run, so this exercises the
+    stage-resolution + skip-done logic against the sample DB with no forensic
+    toolchain. Executing stages for real needs the container image (TSK etc.).
+    """
+    r = subprocess.run(
+        [sys.executable, str(REPO / "bin" / "image-pipeline.py"),
+         db_path, "--preset", preset],
+        capture_output=True, text=True)
+    sys.stdout.write(r.stdout)
+    if r.returncode != 0:
+        sys.stderr.write(r.stderr)
+    return r.returncode
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("mode", nargs="?", default="smoke",
-                    choices=["smoke", "serve", "shot"])
+                    choices=["smoke", "serve", "shot", "plan"])
     ap.add_argument("--port", type=int, default=7799)
     ap.add_argument("--keep", action="store_true", help="keep the workspace on exit")
     ap.add_argument("--out", default=os.path.join(tempfile.gettempdir(), "hdd-shots"),
                     help="screenshot output dir (shot mode)")
+    ap.add_argument("--preset", default="fast", help="pipeline preset (plan mode)")
     args = ap.parse_args()
 
     work = Path(tempfile.mkdtemp(prefix="hdd-run-"))
@@ -296,6 +316,13 @@ def main() -> int:
     root = work
     print(f"workspace: {work}")
     print(f"db:        {db_path}")
+
+    if args.mode == "plan":
+        try:
+            return plan(db_path, args.preset)
+        finally:
+            if not args.keep:
+                shutil.rmtree(work, ignore_errors=True)
 
     env = dict(os.environ, APP_VERSION="driver-smoke")
     srv_log_path = work / "server.log"
