@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -38,6 +39,14 @@ from tui.stages import STAGES  # noqa: E402
 
 ACQUISITION_PREFIXES = ("ddrescue-", "safecopy-")
 CRACKING_KEYS = {"crack-wallet", "crack-keepass", "btcrecover"}
+
+# Wall-clock backstop so a single hung stage (e.g. the bulk_extractor
+# --scope recovered finalization spin noted in CLAUDE.md) can never stall the
+# whole image / queue forever. Generous by default; override per run with
+# --stage-timeout or the STAGE_TIMEOUT env var (seconds; 0 disables).
+DEFAULT_STAGE_TIMEOUT = 43200  # 12h
+TIMEOUT_RC = 124               # matches coreutils `timeout`
+KILL_GRACE_S = 10              # SIGTERM → SIGKILL grace for the stage group
 
 PRESETS: dict[str, list[str]] = {
     "fast":      ["structure-scan", "index-tsk", "detect-wallets", "detect-pictures"],
@@ -181,8 +190,49 @@ def resolve_args(stage, ctx: dict[str, str]) -> list[str]:
     return out
 
 
+def _terminate_group(proc: subprocess.Popen) -> None:
+    """SIGTERM the stage's process group, escalating to SIGKILL after a grace
+    period. The stage runs in its own session so children die with it instead
+    of being orphaned (the previous subprocess.call left them running on kill)."""
+    try:
+        pgid = os.getpgid(proc.pid)
+    except ProcessLookupError:
+        return
+    for sig, wait_s in ((signal.SIGTERM, KILL_GRACE_S), (signal.SIGKILL, 5)):
+        try:
+            os.killpg(pgid, sig)
+        except ProcessLookupError:
+            return
+        try:
+            proc.wait(timeout=wait_s)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def run_command(cmd: list[str], env: dict[str, str], timeout: int,
+                fh=None) -> tuple[int, float]:
+    """Run cmd to completion, returning (rc, elapsed_seconds). A positive
+    timeout kills the whole process group and returns TIMEOUT_RC. Testable in
+    isolation (no stage/db objects required)."""
+    t0 = time.time()
+    proc = subprocess.Popen(cmd, env=env, start_new_session=True)
+    try:
+        rc = proc.wait(timeout=timeout if timeout and timeout > 0 else None)
+    except subprocess.TimeoutExpired:
+        log(f"  TIMEOUT after {timeout}s — terminating stage process group", fh)
+        _terminate_group(proc)
+        return TIMEOUT_RC, time.time() - t0
+    except KeyboardInterrupt:
+        log("  INTERRUPTED at user request — terminating stage process group", fh)
+        _terminate_group(proc)
+        raise
+    return rc, time.time() - t0
+
+
 def run_stage(stage, ctx: dict[str, str], do_run: bool, fh,
-              extra_env: dict[str, str] | None = None) -> tuple[int, float]:
+              extra_env: dict[str, str] | None = None,
+              timeout: int = 0) -> tuple[int, float]:
     script = ROOT / "bin" / stage.script
     if not script.exists():
         log(f"  ERROR: script not found: {script}", fh)
@@ -194,14 +244,11 @@ def run_stage(stage, ctx: dict[str, str], do_run: bool, fh,
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
-    t0 = time.time()
     try:
-        rc = subprocess.call(cmd, env=env)
-    except KeyboardInterrupt:
-        log(f"  INTERRUPTED at user request", fh)
-        raise
-    dt = time.time() - t0
-    return rc, dt
+        return run_command(cmd, env, timeout, fh)
+    except FileNotFoundError:
+        log(f"  ERROR: cannot execute: {script}", fh)
+        return 127, 0.0
 
 
 def main() -> int:
@@ -222,7 +269,20 @@ def main() -> int:
                     help="list named presets and exit")
     ap.add_argument("--preset", help=f"run a named bundle ({', '.join(PRESETS)})")
     ap.add_argument("--log", help="combined runner log path")
+    ap.add_argument("--stage-timeout", type=int, default=None,
+                    help="per-stage wall-clock limit in seconds (0 disables; "
+                         "default from STAGE_TIMEOUT env or "
+                         f"{DEFAULT_STAGE_TIMEOUT})")
     args = ap.parse_args()
+
+    if args.stage_timeout is not None:
+        stage_timeout = args.stage_timeout
+    else:
+        try:
+            stage_timeout = int(os.environ.get("STAGE_TIMEOUT",
+                                               DEFAULT_STAGE_TIMEOUT))
+        except ValueError:
+            stage_timeout = DEFAULT_STAGE_TIMEOUT
 
     if args.list:
         list_stages()
@@ -278,6 +338,8 @@ def main() -> int:
     log(f"Mode:        {'RUN' if args.run else 'dry-run'}"
         f"{'  keep-going' if args.keep_going else ''}"
         f"{'  skip-done' if args.skip_done else ''}", fh)
+    log(f"Stage limit: {stage_timeout}s" if stage_timeout > 0
+        else "Stage limit: disabled", fh)
     if fh:
         log(f"Runner log:  {log_path}", fh)
     log(f"Plan:        {len(plan)} stage(s) — {' → '.join(s.key for s in plan)}", fh)
@@ -294,7 +356,7 @@ def main() -> int:
         if s.warning:
             log(f"  WARNING: {s.warning}", fh)
         try:
-            rc, dt = run_stage(s, ctx, args.run, fh, extra_env)
+            rc, dt = run_stage(s, ctx, args.run, fh, extra_env, stage_timeout)
         except KeyboardInterrupt:
             results.append((s.key, "interrupted", 0.0, 130))
             failed_any = True
@@ -302,7 +364,7 @@ def main() -> int:
         if not args.run:
             results.append((s.key, "preview", 0.0, 0))
             continue
-        status = "ok" if rc == 0 else "failed"
+        status = "ok" if rc == 0 else ("timeout" if rc == TIMEOUT_RC else "failed")
         results.append((s.key, status, dt, rc))
         log(f"  -> {status} in {dt:.1f}s (rc={rc})", fh)
         if rc != 0:

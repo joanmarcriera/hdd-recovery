@@ -35,19 +35,22 @@ def _ts() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def build_cmd(db: str, stages: list[str], skip_done: bool, keep_going: bool) -> list[str]:
+def build_cmd(db: str, stages: list[str], skip_done: bool, keep_going: bool,
+              stage_timeout: int | None = None) -> list[str]:
     """Build the image-pipeline.py command for one image (pure/testable)."""
     cmd = [sys.executable, str(PIPELINE), db, "--run"]
     if skip_done:
         cmd.append("--skip-done")
     if keep_going:
         cmd.append("--keep-going")
+    if stage_timeout is not None:
+        cmd += ["--stage-timeout", str(stage_timeout)]
     cmd += stages
     return cmd
 
 
-def run_one(db: str, stages, skip_done, keep_going) -> int:
-    cmd = build_cmd(db, stages, skip_done, keep_going)
+def run_one(db: str, stages, skip_done, keep_going, stage_timeout=None) -> int:
+    cmd = build_cmd(db, stages, skip_done, keep_going, stage_timeout)
     name = Path(db).name
     print(f"[{_ts()}] START {name}", flush=True)
     t0 = time.time()
@@ -68,6 +71,9 @@ def main() -> int:
     ap.add_argument("--stages", default="", help="comma-separated stage keys")
     ap.add_argument("--skip-done", action="store_true")
     ap.add_argument("--keep-going", action="store_true")
+    ap.add_argument("--stage-timeout", type=int, default=None,
+                    help="per-stage wall-clock limit (s) passed to each image "
+                         "pipeline; 0 disables, default from STAGE_TIMEOUT env")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -81,17 +87,20 @@ def main() -> int:
 
     if args.dry_run:
         for db in args.dbs:
-            print("DRY " + " ".join(build_cmd(db, stages, args.skip_done, args.keep_going)),
+            print("DRY " + " ".join(build_cmd(db, stages, args.skip_done,
+                                              args.keep_going, args.stage_timeout)),
                   flush=True)
         return 0
 
     rcs: list[int] = []
     if jobs == 1:
         for db in args.dbs:
-            rcs.append(run_one(db, stages, args.skip_done, args.keep_going))
+            rcs.append(run_one(db, stages, args.skip_done, args.keep_going,
+                               args.stage_timeout))
     else:
         with ThreadPoolExecutor(max_workers=jobs) as ex:
-            futs = [ex.submit(run_one, db, stages, args.skip_done, args.keep_going)
+            futs = [ex.submit(run_one, db, stages, args.skip_done, args.keep_going,
+                              args.stage_timeout)
                     for db in args.dbs]
             rcs = [f.result() for f in futs]
 
