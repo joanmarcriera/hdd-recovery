@@ -842,37 +842,197 @@ def page_queue(root):
     return page("Queue", body, nav_extra=" &rsaquo; queue")
 
 
-def page_queue_log(root, log_path, tail_kb=64):
-    """Tail a queue log (validated to live under the queue-log dir)."""
+# bulk_extractor prints one "Offset NNNmb (PP.PP%) Done in H:MM:SS at ..." line
+# per second; on the --scope recovered finalization spin these flood the tail and
+# bury the START/DONE markers. Collapse runs of them for display only — the full
+# log on disk is never touched.
+_QUEUE_NOISE_RE = re.compile(r"Offset\s+\d.*Done in", re.I)
+
+
+def _collapse_queue_noise(text):
+    """Collapse consecutive bulk_extractor progress lines so the queue markers
+    stay readable. Keeps the latest line of each run for context."""
+    out, run = [], []
+
+    def flush():
+        if not run:
+            return
+        if len(run) > 2:
+            out.append(f"  … {len(run)} bulk_extractor progress lines "
+                       f"collapsed (latest below) …")
+            out.append(run[-1])
+        else:
+            out.extend(run)
+        run.clear()
+
+    for line in text.splitlines():
+        if _QUEUE_NOISE_RE.search(line):
+            run.append(line)
+        else:
+            flush()
+            out.append(line)
+    flush()
+    return "\n".join(out)
+
+
+# cache the last marker scan per log so an unchanged file isn't re-read on every
+# poll (idle / finished logs being browsed); an actively growing file still
+# rescans, which is cheap from the page cache for a single-user homelab tool.
+_QPROG_LOCK = threading.Lock()
+_QPROG_CACHE = {}  # path -> (sig, progress_dict)
+
+
+def _scan_queue_progress(path):
+    """Derive queue progress from START/DONE markers (lines starting with '['),
+    skipping the per-second progress spam. Returns counts + current image."""
+    total = started = done = 0
+    current = first_ts = last_ts = None
+    finished = stages = ""
+    try:
+        with open(path, "r", errors="replace") as fh:
+            for line in fh:
+                if not line.startswith("["):          # skip progress spam fast
+                    continue
+                ts = line[1:line.find("]")] if "]" in line else ""
+                if first_ts is None:
+                    first_ts = ts
+                last_ts = ts
+                if "queue:" in line and "image(s)" in line:
+                    m = re.search(r"queue:\s*(\d+)\s*image", line)
+                    if m:
+                        total = int(m.group(1))
+                    ms = re.search(r"stages=(\S+)", line)
+                    if ms:
+                        stages = ms.group(1)
+                elif "] START " in line:
+                    started += 1
+                    current = line.split("] START ", 1)[1].strip()
+                elif "] DONE " in line:
+                    done += 1
+                elif "queue finished:" in line:
+                    finished = line.split("]", 1)[1].strip()
+    except OSError:
+        pass
+    if finished or started <= done:               # nothing currently running
+        current = None
+    return {"total": total, "started": started, "done": done, "current": current,
+            "finished": finished, "first_ts": first_ts, "last_ts": last_ts,
+            "stages": stages}
+
+
+def _queue_progress_cached(path):
+    try:
+        st = os.stat(path)
+    except OSError:
+        return _scan_queue_progress(path)
+    sig = (st.st_size, st.st_mtime_ns)
+    with _QPROG_LOCK:
+        ent = _QPROG_CACHE.get(path)
+        if ent and ent[0] == sig:
+            return ent[1]
+    prog = _scan_queue_progress(path)
+    with _QPROG_LOCK:
+        _QPROG_CACHE[path] = (sig, prog)
+    return prog
+
+
+def _queue_progress_html(prog, running):
+    """Render the queue progress header (image counts + current image + bar)."""
+    total, done, cur = prog["total"], prog["done"], prog["current"]
+    pct = int(done * 100 / total) if total else 0
+    if prog["finished"]:
+        head = f'<span class="badge ok">finished</span> {h(prog["finished"])}'
+    elif running:
+        head = (f'<span class="badge running">running</span> '
+                f'image {done + 1} of {total or "?"}')
+    else:
+        head = '<span class="badge ok">idle</span>'
+    bar = (f'<div style="background:#222;border-radius:4px;height:10px;margin:8px 0;'
+           f'overflow:hidden"><div style="width:{pct}%;height:100%;'
+           f'background:#22aa44"></div></div>')
+    cur_html = (f'<div class="count">current image: <b>{h(cur)}</b></div>'
+                if cur else "")
+    return (f'<div>{head} &nbsp; <b>{done} / {total or "?"}</b> images done '
+            f'<span class="count">({pct}%)</span></div>{bar}{cur_html}')
+
+
+def queue_log_payload(root, log_path, tail_kb=64):
+    """Shared data for the queue-log HTML page and its raw=1 JSON poll endpoint.
+    Returns None (no logs), {'error': ...}, or the full payload dict."""
     qdir = os.path.realpath(_queue_log_dir(root))
     if not log_path:
         recent = sorted(glob.glob(os.path.join(qdir, "queue-*.log")),
                         key=os.path.getmtime, reverse=True)
         if not recent:
-            return page("Queue Log", '<div class="panel"><p>No queue logs yet. '
-                        '<a href="/queue">Start one</a>.</p></div>', nav_extra=" &rsaquo; queue log")
+            return None
         log_path = recent[0]
     real = os.path.realpath(log_path)
     if not (real.startswith(qdir + os.sep) and os.path.isfile(real)):
-        return page("Queue Log", '<div class="panel err">log path not allowed</div>',
-                    nav_extra=" &rsaquo; queue log")
+        return {"error": "log path not allowed"}
     size = os.path.getsize(real)
     with open(real, "rb") as fh:
         if size > tail_kb * 1024:
             fh.seek(-tail_kb * 1024, os.SEEK_END)
             fh.readline()
-        text = fh.read().decode("utf-8", errors="replace")
-    qpid, _ = queue_active()
-    refresh = '<meta http-equiv="refresh" content="4">' if qpid else ""
-    state = ('<span class="badge running">running</span>' if qpid
+        tail = fh.read().decode("utf-8", errors="replace")
+    return {"real": real, "size": size, "tail": _collapse_queue_noise(tail),
+            "running": bool(queue_active()[0]),
+            "progress": _queue_progress_cached(real)}
+
+
+def page_queue_log(root, log_path):
+    """Queue-log viewer: progress header + collapsed tail, with a JS poller that
+    refreshes in place (preserves scroll, can be paused) instead of reloading."""
+    payload = queue_log_payload(root, log_path)
+    if payload is None:
+        return page("Queue Log", '<div class="panel"><p>No queue logs yet. '
+                    '<a href="/queue">Start one</a>.</p></div>',
+                    nav_extra=" &rsaquo; queue log")
+    if "error" in payload:
+        return page("Queue Log", f'<div class="panel err">{h(payload["error"])}</div>',
+                    nav_extra=" &rsaquo; queue log")
+    real, size, running = payload["real"], payload["size"], payload["running"]
+    prog_html = _queue_progress_html(payload["progress"], running)
+    enc = urllib.parse.quote(real)
+    state = ('<span class="badge running">running</span>' if running
              else '<span class="badge ok">idle</span>')
-    body = f"""<div class="panel">
-      <p>{state} &nbsp; <code>{h(real)}</code> &nbsp; ({size:,} bytes)
-         &nbsp; <a href="/queue">&larr; Queue</a></p>
-      <pre class="mono" style="background:#0d1117;padding:10px;border-radius:4px;
-            max-height:70vh;overflow:auto;font-size:12px">{h(text)}</pre>
-    </div>"""
-    return page("Queue Log", body, nav_extra=" &rsaquo; queue log", head_extra=refresh)
+    poll_js = """<script>
+(function(){
+  var url=%s, paused=false, timer=null;
+  var pre=document.getElementById('qlog'), prog=document.getElementById('qprog');
+  var btn=document.getElementById('qpause');
+  function atBottom(){return pre.scrollHeight-pre.scrollTop-pre.clientHeight<40;}
+  async function tick(){
+    if(paused) return;
+    try{
+      var r=await fetch(url,{cache:'no-store'}); var d=await r.json();
+      var stick=atBottom();
+      pre.textContent=d.tail; prog.innerHTML=d.progress_html;
+      document.getElementById('qsize').textContent=d.size_h;
+      if(stick) pre.scrollTop=pre.scrollHeight;
+      if(!d.running){ if(timer) clearInterval(timer);
+        document.getElementById('qstate').innerHTML='<span class="badge ok">idle</span>'; }
+    }catch(e){}
+  }
+  btn.onclick=function(){paused=!paused; btn.textContent=paused?'\\u25b6 Resume':'\\u23f8 Pause';};
+  pre.scrollTop=pre.scrollHeight;
+  if(%s) timer=setInterval(tick,5000);
+})();
+</script>""" % (json.dumps("/queue_log?log=" + enc + "&raw=1"),
+                "true" if running else "false")
+    # <noscript> keeps a plain meta-refresh fallback when JS is unavailable.
+    noscript = ('<noscript><meta http-equiv="refresh" content="6"></noscript>'
+                if running else "")
+    body = f"""<div class="panel"><div id="qprog">{prog_html}</div></div>
+    <div class="panel">
+      <p><span id="qstate">{state}</span> &nbsp; <code>{h(real)}</code> &nbsp;
+         (<span id="qsize">{_human_size(size)}</span>) &nbsp;
+         <button id="qpause" type="button">⏸ Pause</button> &nbsp;
+         <a href="/queue">&larr; Queue</a></p>
+      <pre id="qlog" class="mono" style="background:#0d1117;padding:10px;
+            border-radius:4px;max-height:70vh;overflow:auto;font-size:12px">{h(payload["tail"])}</pre>
+    </div>{poll_js}"""
+    return page("Queue Log", body, nav_extra=" &rsaquo; queue log", head_extra=noscript)
 
 
 def page_pipeline_log(db_path, log_path, tail_kb=64):
@@ -2413,7 +2573,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif p == "/queue":
                 self.send_html(page_queue(self.root))
             elif p == "/queue_log":
-                self.send_html(page_queue_log(self.root, self.qsval("log")))
+                if self.qsval("raw") == "1":
+                    payload = queue_log_payload(self.root, self.qsval("log"))
+                    if not payload or "error" in payload:
+                        body = b'{"error":"unavailable"}'
+                    else:
+                        body = json.dumps({
+                            "tail": payload["tail"],
+                            "running": payload["running"],
+                            "size_h": _human_size(payload["size"]),
+                            "progress_html": _queue_progress_html(
+                                payload["progress"], payload["running"]),
+                        }).encode("utf-8")
+                    self.send_bytes_cached(body, "application/json", "", max_age=0)
+                else:
+                    self.send_html(page_queue_log(self.root, self.qsval("log")))
             else:
                 self.send_html(page("404", "<p>Not found.</p>"), 404)
         except (BrokenPipeError, ConnectionResetError):
