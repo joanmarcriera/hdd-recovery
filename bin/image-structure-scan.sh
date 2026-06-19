@@ -45,8 +45,15 @@ run_id="$(record_scan_start "$db" "structure-scan" "$0 $db" "$log_path" "$struct
 
 existing_files="$(db_value "$db" "SELECT COUNT(*) FROM files WHERE partition_id IS NOT NULL;")"
 if [[ "${existing_files:-0}" -gt 0 && "$force" -ne 1 ]]; then
-  record_scan_end "$db" "$run_id" "skipped" "refused to rescan structure because indexed files still reference partitions; rerun with --force if you want to rebuild partition provenance"
-  die "structure scan would orphan partition provenance for $existing_files indexed file rows; rerun with --force if intentional"
+  # The structure is already established (partitions exist and the filesystem
+  # index links files to them). Rebuilding would orphan that provenance, so this
+  # is a deliberate no-op rather than an error — exiting non-zero here made the
+  # pipeline report a *permanent* failure on every re-run (skip-done never skips
+  # it because the recorded status was not "ok"). Record success with a note and
+  # let the operator use --force to intentionally rebuild.
+  record_scan_end "$db" "$run_id" "ok" "structure already present; not rescanned ($existing_files indexed file rows reference partitions). Use --force to rebuild partition provenance."
+  printf 'SKIP: structure already present; %s indexed file rows reference partitions. Use --force to rebuild.\n' "$existing_files"
+  exit 0
 fi
 
 {
