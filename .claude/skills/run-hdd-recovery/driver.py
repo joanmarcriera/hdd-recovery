@@ -142,7 +142,7 @@ def req(port, path, headers=None):
     return r.status, hdrs, body
 
 
-def smoke(port: int, db_path: str, jpeg: Path) -> int:
+def smoke(port: int, db_path: str, jpeg: Path, srv_log=None) -> int:
     enc_db = urllib.parse.quote(db_path)
     enc_img = urllib.parse.quote(str(jpeg))
     passed, failed = 0, 0
@@ -212,6 +212,24 @@ def smoke(port: int, db_path: str, jpeg: Path) -> int:
     st, hd, body = req(port, "/file?path=/etc/passwd")
     check("traversal /etc/passwd → 403", st == 403, f"status={st}")
 
+    # client disconnect mid-response must not crash the handler or log a
+    # BrokenPipeError traceback (regression test for the proxy/refresh case)
+    import socket as _socket
+    s = _socket.create_connection(("127.0.0.1", port))
+    s.sendall(b"GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip\r\n\r\n")
+    s.close()  # close before reading → server writes into a dead socket
+    time.sleep(0.4)
+    st, hd, body = req(port, "/")  # server must still be serving
+    check("survives client disconnect", st == 200, f"status={st}")
+    if srv_log:
+        try:
+            log_txt = Path(srv_log).read_text(errors="replace")
+        except OSError:
+            log_txt = ""
+        check("no BrokenPipeError traceback in server log",
+              "BrokenPipeError" not in log_txt,
+              "server logged a broken-pipe traceback")
+
     print(f"\n{passed} passed, {failed} failed")
     return 1 if failed else 0
 
@@ -274,10 +292,12 @@ def main() -> int:
     print(f"db:        {db_path}")
 
     env = dict(os.environ, APP_VERSION="driver-smoke")
+    srv_log_path = work / "server.log"
+    srv_log = open(srv_log_path, "w")
     proc = subprocess.Popen(
         [sys.executable, str(SERVE), "--root", str(root),
          "--host", "127.0.0.1", "--port", str(args.port)],
-        env=env,
+        env=env, stdout=srv_log, stderr=subprocess.STDOUT,
     )
     try:
         wait_up(args.port)
@@ -290,7 +310,7 @@ def main() -> int:
             print(f"\nscreenshotting → {args.out}")
             return shot(args.port, db_path, args.out)
         print(f"\nsmoke-testing http://127.0.0.1:{args.port}/ ...")
-        return smoke(args.port, db_path, jpeg)
+        return smoke(args.port, db_path, jpeg, srv_log_path)
     finally:
         proc.send_signal(signal.SIGTERM)
         try:

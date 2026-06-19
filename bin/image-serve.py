@@ -2196,15 +2196,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if "gzip" in self.headers.get("Accept-Encoding", "") and len(encoded) > 512:
             encoded = gzip.compress(encoded, 5)
             gzipped = True
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Vary", "Accept-Encoding")
-        if gzipped:
-            self.send_header("Content-Encoding", "gzip")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        if self.command != "HEAD":
-            self.wfile.write(encoded)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Vary", "Accept-Encoding")
+            if gzipped:
+                self.send_header("Content-Encoding", "gzip")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            if self.command != "HEAD":
+                self.wfile.write(encoded)
+        except (BrokenPipeError, ConnectionResetError):
+            # client closed the connection mid-response (refresh / navigate away)
+            self.close_connection = True
 
     def send_bytes_cached(self, data, mime, etag, max_age=86400, extra_headers=None):
         """Send an in-memory blob with ETag/Cache-Control, honouring If-None-Match (304)."""
@@ -2388,6 +2392,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_html(page_queue_log(self.root, self.qsval("log")))
             else:
                 self.send_html(page("404", "<p>Not found.</p>"), 404)
+        except (BrokenPipeError, ConnectionResetError):
+            self.close_connection = True  # client disconnected; nothing to send
         except Exception as e:
             self.send_html(page("Error", f'<p class="err">{h(str(e))}</p>'), 500)
 

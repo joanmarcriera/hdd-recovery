@@ -37,20 +37,23 @@ matters, then tears down (exit non-zero on any failure):
 python3 .claude/skills/run-hdd-recovery/driver.py smoke --port 7802
 ```
 
-Expected tail (21 checks, all `ok`):
+Expected tail (23 checks, all `ok`):
 
 ```
-  ok   home shows human image size
-  ok   home shows stage-group chips
   ok   GET /queue → 200
   ok   queue offers presets + start
   ok   POST /queue empty → 400
   ...
-  ok   thumb < original (707 < 34529 B)
   ok   traversal /etc/passwd → 403
+  ok   survives client disconnect
+  ok   no BrokenPipeError traceback in server log
 
-21 passed, 0 failed
+23 passed, 0 failed
 ```
+
+(The last two guard against a client disconnecting mid-response — browser
+refresh / reverse-proxy cancel — which must not crash the handler or spew a
+`BrokenPipeError` traceback.)
 
 It checks: home renders (gzipped, image name not the db filename, human image
 size, per-stage-group chips, build footer); the multi-image `/queue` page lists
