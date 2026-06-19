@@ -12,8 +12,11 @@ Modes:
           non-zero on any failure. This is the agent path.
   serve   launch against the sample workspace and stay up (Ctrl-C to stop)
           so you can open it in a browser. Prints the URL.
+  shot    launch and screenshot the visual surfaces (dashboard, gallery, queue)
+          with headless Chrome into --out (default $TMPDIR/hdd-shots).
 
-Both modes print the workspace path. Requires: python3 + Pillow (PIL).
+All modes print the workspace path. Requires: python3 + Pillow (PIL);
+`shot` additionally needs Chrome/Chromium.
 """
 from __future__ import annotations
 
@@ -213,11 +216,55 @@ def smoke(port: int, db_path: str, jpeg: Path) -> int:
     return 1 if failed else 0
 
 
+def _find_chrome():
+    """Locate a headless-capable Chrome/Chromium on macOS or Linux."""
+    cands = [
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        shutil.which("google-chrome"), shutil.which("google-chrome-stable"),
+        shutil.which("chromium"), shutil.which("chromium-browser"),
+        shutil.which("chromium-cli"),
+    ]
+    return next((c for c in cands if c and os.path.exists(c)), None)
+
+
+def shot(port, db_path, outdir) -> int:
+    """Screenshot the visual surfaces (dashboard, gallery) with headless Chrome."""
+    chrome = _find_chrome()
+    if not chrome:
+        print("FATAL: no Chrome/Chromium found (install one, or use `serve` "
+              "and screenshot manually).")
+        return 1
+    os.makedirs(outdir, exist_ok=True)
+    enc_db = urllib.parse.quote(db_path)
+    targets = [
+        ("dashboard", f"http://127.0.0.1:{port}/"),
+        ("gallery",   f"http://127.0.0.1:{port}/gallery?db={enc_db}"),
+        ("queue",     f"http://127.0.0.1:{port}/queue"),
+    ]
+    rc = 0
+    for name, url in targets:
+        out = os.path.join(outdir, f"{name}.png")
+        cmd = [chrome, "--headless=new", "--disable-gpu", "--no-sandbox",
+               "--hide-scrollbars", "--force-color-profile=srgb",
+               "--virtual-time-budget=3000", "--window-size=1280,1400",
+               f"--screenshot={out}", url]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        ok = os.path.isfile(out) and os.path.getsize(out) > 0
+        print(f"  {'ok  ' if ok else 'FAIL'} {name}: {out}"
+              + ("" if ok else f"  ({r.stderr.strip()[:120]})"))
+        rc = rc or (0 if ok else 1)
+    return rc
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("mode", nargs="?", default="smoke", choices=["smoke", "serve"])
+    ap.add_argument("mode", nargs="?", default="smoke",
+                    choices=["smoke", "serve", "shot"])
     ap.add_argument("--port", type=int, default=7799)
     ap.add_argument("--keep", action="store_true", help="keep the workspace on exit")
+    ap.add_argument("--out", default=os.path.join(tempfile.gettempdir(), "hdd-shots"),
+                    help="screenshot output dir (shot mode)")
     args = ap.parse_args()
 
     work = Path(tempfile.mkdtemp(prefix="hdd-run-"))
@@ -239,6 +286,9 @@ def main() -> int:
             signal.signal(signal.SIGINT, lambda *_: sys.exit(0))
             proc.wait()
             return 0
+        if args.mode == "shot":
+            print(f"\nscreenshotting → {args.out}")
+            return shot(args.port, db_path, args.out)
         print(f"\nsmoke-testing http://127.0.0.1:{args.port}/ ...")
         return smoke(args.port, db_path, jpeg)
     finally:

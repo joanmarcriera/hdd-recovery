@@ -78,6 +78,31 @@ python3 .claude/skills/run-hdd-recovery/driver.py serve --port 7803
 # → http://127.0.0.1:7803/   (Ctrl-C to stop). Add --keep to retain the workspace.
 ```
 
+## Screenshots (visual check)
+
+The dashboard and gallery are visual, so `shot` mode drives headless Chrome over
+the running server and writes PNGs you can open/Read:
+
+```bash
+python3 .claude/skills/run-hdd-recovery/driver.py shot --port 7808 --out /tmp/hdd-shots
+# ok dashboard: /tmp/hdd-shots/dashboard.png
+# ok gallery:   /tmp/hdd-shots/gallery.png
+# ok queue:     /tmp/hdd-shots/queue.png
+```
+
+Needs Chrome/Chromium (auto-detected: macOS `Google Chrome.app`, or
+`google-chrome`/`chromium` on PATH). `dashboard.png` should show the Image / Size
+/ Stages columns with coloured stage-group chips; `queue.png` the preset
+checkboxes + image list.
+
+## Test (Go supervisor)
+
+The container's process manager has its own Go tests:
+
+```bash
+cd docker/supervisor && go test ./...
+```
+
 ## Run (against your own data)
 
 Point the real server at any directory tree containing `*.analysis.sqlite` files
