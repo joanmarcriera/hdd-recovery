@@ -37,27 +37,35 @@ matters, then tears down (exit non-zero on any failure):
 python3 .claude/skills/run-hdd-recovery/driver.py smoke --port 7802
 ```
 
-Expected tail (14 checks, all `ok`):
+Expected tail (21 checks, all `ok`):
 
 ```
-  ok   GET /db → 200
-  ok   db page shows seeded stages
-  ok   gallery uses /thumb thumbnails
-  ok   GET /thumb → 200 image/jpeg
-  ok   thumb has ETag + Cache-Control
+  ok   home shows human image size
+  ok   home shows stage-group chips
+  ok   GET /queue → 200
+  ok   queue offers presets + start
+  ok   POST /queue empty → 400
+  ...
   ok   thumb < original (707 < 34529 B)
-  ok   thumb revalidation → 304
-  ok   GET /file → 200 with ETag
   ok   traversal /etc/passwd → 403
 
-14 passed, 0 failed
+21 passed, 0 failed
 ```
 
-It checks: home renders (gzipped, lists the sample DB, shows the build footer),
-the `/db` detail page renders the seeded `scan_runs` stage history, the gallery
-serves downscaled `/thumb` JPEGs instead of full-res originals, thumbnails carry
-`ETag`/`Cache-Control` and revalidate to `304`, `/file` is cached, and path
-traversal is blocked.
+It checks: home renders (gzipped, image name not the db filename, human image
+size, per-stage-group chips, build footer); the multi-image `/queue` page lists
+images + presets and validates an empty POST (400); the `/db` detail page renders
+the seeded `scan_runs` history; the gallery serves downscaled `/thumb` JPEGs
+instead of full-res originals; thumbnails carry `ETag`/`Cache-Control` and
+revalidate to `304`; `/file` is cached; path traversal is blocked.
+
+The batch orchestrator behind `/queue` is `bin/image-queue.py`; preview the exact
+per-image commands it would run without executing anything:
+
+```bash
+python3 bin/image-queue.py --dry-run --jobs 2 --skip-done --keep-going \
+  --stages structure-scan,carve-foremost /tmp/a.analysis.sqlite /tmp/b.analysis.sqlite
+```
 
 The fixture (`build_workspace` in the driver) seeds `image_info.image_size_bytes`
 and a spread of `scan_runs` (`ok`/`partial`/`running`/`failed`) — useful data for

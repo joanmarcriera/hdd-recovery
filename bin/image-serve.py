@@ -43,6 +43,8 @@ tr:hover td{background:#1e2a4a}
 .failed,.error{background:#4a1010;color:#e74c3c}
 .running{background:#0d3b5e;color:#7eb8f7}
 .pending{background:#333;color:#aaa}
+.chip{display:inline-block;padding:1px 5px;margin:1px;border-radius:3px;font-size:10px;font-weight:bold}
+.chip.pending{background:transparent;color:#556;border:1px solid #2a2a4a}
 form{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start}
 input[type=text],select,textarea{background:#0d1117;color:var(--txt);border:1px solid var(--accent);
   border-radius:4px;padding:6px 10px;font:13px monospace;flex:1;min-width:200px}
@@ -292,10 +294,69 @@ def mem_panel():
 
 # ── pages ─────────────────────────────────────────────────────────────────────
 
+def _human_size(n):
+    """Bytes → compact human string (e.g. 160041885696 → '149 GB')."""
+    try:
+        n = float(n)
+    except (TypeError, ValueError):
+        return "—"
+    if n <= 0:
+        return "—"
+    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
+        if n < 1024 or unit == "PB":
+            s = f"{n:.1f}".rstrip("0").rstrip(".")
+            return f"{s} {unit}"
+        n /= 1024
+
+
+# Home dashboard stage groups: which recorded scan_runs.stage names roll up into
+# each at-a-glance indicator. Mirrors the pipeline presets but tolerant of the
+# extra/renamed stage keys real DBs contain (e.g. llava-tag-photos).
+_HOME_STAGE_GROUPS = [
+    ("fast",    ["structure-scan", "index-tsk", "detect-wallets", "detect-pictures"]),
+    ("carve",   ["carve-foremost", "carve-scalpel", "carve-recoverjpeg",
+                 "carve-magicrescue", "photorec-broad"]),
+    ("recover", ["ext-recover", "ntfs-recover", "fat-recover", "xfs-recover",
+                 "btrfs-recover", "extract-winmem"]),
+    ("index",   ["bulk-extractor-raw", "bulk-extractor-recovered", "yara-scan",
+                 "recoll-index", "plaso-timeline", "enrich-trid"]),
+    ("photos",  ["enrich-photos", "dedup-photos", "tag-photos", "llava-tag-photos"]),
+    ("wallet",  ["wallet-inspect", "text-seed-scan", "crack-wallet", "btcrecover"]),
+    ("win",     ["ntfs-artifact-summary", "regripper", "rifiuti2"]),
+]
+
+
+def _stage_group_chips(stage_status):
+    """Compact per-group status chips from a {stage: latest_status} dict."""
+    chips = []
+    for label, members in _HOME_STAGE_GROUPS:
+        present = {s: stage_status[s] for s in members if s in stage_status}
+        low = [str(v).lower() for v in present.values()]
+        if not present:
+            cls = "pending"
+        elif "running" in low:
+            cls = "running"
+        elif any(v in ("failed", "error") for v in low):
+            cls = "failed"
+        elif any(v == "partial" for v in low):
+            cls = "partial"
+        elif all(v == "ok" for v in low):
+            cls = "ok"
+        else:
+            cls = "partial"
+        if present:
+            tip = f"{label}: " + ", ".join(f"{s}={v}" for s, v in present.items())
+        else:
+            tip = f"{label}: not run"
+        chips.append(f'<span class="chip {cls}" title="{h(tip)}">{label}</span>')
+    return "".join(chips)
+
+
 def _home_db_stats(db_path):
     """Fetch all homepage row fields for one DB over a single connection."""
-    stats = {"image_path": "?", "total_files": 0, "total_artifacts": 0,
-             "wallet_hits": 0, "last_run": "—", "map_path": ""}
+    stats = {"image_path": "?", "image_size": 0, "total_files": 0,
+             "total_artifacts": 0, "wallet_hits": 0, "last_run": "—",
+             "map_path": "", "stage_status": {}}
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     except Exception:
@@ -309,18 +370,37 @@ def _home_db_stats(db_path):
                 return default
         try:
             info = conn.execute(
-                "SELECT image_path, ddrescue_map_path FROM image_info WHERE id=1"
+                "SELECT image_path, ddrescue_map_path, image_size_bytes "
+                "FROM image_info WHERE id=1"
             ).fetchone()
         except Exception:
             info = None
         if info:
             stats["image_path"] = info[0] or "?"
             stats["map_path"] = info[1] or ""
+            stats["image_size"] = info[2] or 0
+        # fall back to the on-disk image size if the column is unset
+        if not stats["image_size"] and stats["image_path"] not in ("", "?"):
+            try:
+                stats["image_size"] = os.path.getsize(stats["image_path"])
+            except OSError:
+                pass
         stats["total_files"] = scalar("SELECT COUNT(*) FROM files", 0)
         stats["total_artifacts"] = scalar("SELECT COUNT(*) FROM recovered_artifacts", 0)
         stats["wallet_hits"] = scalar("SELECT COUNT(*) FROM wallet_candidates", 0)
         stats["last_run"] = scalar(
             "SELECT MAX(COALESCE(ended_at, started_at)) FROM scan_runs", "—")
+        # latest status per stage (highest id wins)
+        try:
+            latest = {}
+            for stage, status in conn.execute(
+                "SELECT stage, status FROM scan_runs ORDER BY id"
+            ):
+                if stage:
+                    latest[stage] = status
+            stats["stage_status"] = latest
+        except Exception:
+            pass
     finally:
         conn.close()
     return stats
@@ -344,23 +424,27 @@ def page_home(root):
 
     rows_html = ""
     for db_path in dbs:
-        name = Path(db_path).name
-        size_mb = os.path.getsize(db_path) / 1e6
         st = _home_db_stats(db_path)
         image_path = st["image_path"]
+        # primary label is the image name; fall back to the db stem if unknown
+        if image_path and image_path != "?":
+            img_name = Path(image_path).name
+        else:
+            dbn = Path(db_path).name
+            img_name = dbn[:-len(".analysis.sqlite")] if dbn.endswith(".analysis.sqlite") else dbn
         map_p = st["map_path"]
         enc = urllib.parse.quote(db_path)
-        map_cell = (f'<a href="/mapview?db={enc}">&#128209;</a>'
+        map_cell = (f'<a href="/mapview?db={enc}" title="ddrescue map">&#128209;</a>'
                     if map_p and os.path.isfile(map_p) else "—")
         link = f'/db?db={enc}'
         rows_html += f"""<tr>
-          <td><a href="{link}">{h(name)}</a></td>
-          <td class="mono">{h(Path(image_path).name)}</td>
-          <td>{size_mb:.1f} MB</td>
+          <td><a href="{link}">{h(img_name)}</a></td>
+          <td style="white-space:nowrap">{h(_human_size(st["image_size"]))}</td>
           <td>{st["total_files"]:,}</td>
           <td>{st["total_artifacts"]:,}</td>
           <td>{st["wallet_hits"]:,}</td>
-          <td>{h(str(st["last_run"])[:19])}</td>
+          <td style="line-height:1.7">{_stage_group_chips(st["stage_status"])}</td>
+          <td style="white-space:nowrap">{h(str(st["last_run"])[:19])}</td>
           <td style="text-align:center">{map_cell}</td>
         </tr>"""
 
@@ -382,10 +466,16 @@ def page_home(root):
             )
 
     body = f"""{mem_panel()}{pipeline_banner}<div class="panel">
-      <p class="count">{len(dbs)} database(s) found under <code>{h(root)}</code></p>
+      <p class="count" style="display:flex;justify-content:space-between;align-items:center">
+        <span>{len(dbs)} image(s) found under <code>{h(root)}</code></span>
+        <a href="/queue" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7"
+           title="Queue fast/carve/etc. across multiple images">&#9654; Queue work</a>
+      </p>
       <table style="margin-top:10px">
-        <tr><th>Database</th><th>Image</th><th>DB Size</th>
-            <th>Files</th><th>Artifacts</th><th>Wallet Hits</th><th>Last Run</th><th>Map</th></tr>
+        <tr><th>Image</th><th>Size</th>
+            <th>Files</th><th>Artifacts</th><th>Wallets</th>
+            <th title="Pipeline stage groups that have run (hover a chip for detail)">Stages</th>
+            <th>Last Run</th><th>Map</th></tr>
         {rows_html}
       </table>
     </div>"""
@@ -565,6 +655,205 @@ def spawn_pipeline(db_path, presets, keep_going=False, skip_done=False):
         start_new_session=True
     )
     return log_path, proc.pid
+
+
+# ── multi-image queue ─────────────────────────────────────────────────────────
+
+_QUEUE_PATH = Path(__file__).resolve().parent / "image-queue.py"
+
+
+def _merge_preset_stages(presets):
+    """Resolve a list of preset names to a deduplicated, ordered stage list."""
+    if not all(p in PIPELINE_PRESETS for p in presets):
+        raise ValueError("unknown preset(s)")
+    seen, stages = set(), []
+    for p in presets:
+        for s in PIPELINE_PRESETS[p]:
+            if s not in seen:
+                seen.add(s)
+                stages.append(s)
+    return stages
+
+
+def _queue_log_dir(root):
+    """First writable dir for queue logs: <root>/queue-logs, else a temp dir."""
+    for cand in (os.path.join(root, "queue-logs"),
+                 os.path.join(tempfile.gettempdir(), "hdd-queue-logs")):
+        try:
+            os.makedirs(cand, exist_ok=True)
+            if os.access(cand, os.W_OK):
+                return cand
+        except OSError:
+            continue
+    return tempfile.gettempdir()
+
+
+def build_queue_cmd(dbs, stages, jobs, skip_done, keep_going):
+    """Build the image-queue.py command line (pure/testable)."""
+    cmd = [sys.executable, str(_QUEUE_PATH), "--jobs", str(jobs),
+           "--stages", ",".join(stages)]
+    if skip_done:
+        cmd.append("--skip-done")
+    if keep_going:
+        cmd.append("--keep-going")
+    cmd += list(dbs)
+    return cmd
+
+
+def queue_active():
+    """Return (pid, argv) of a running image-queue.py, or (None, None)."""
+    try:
+        out = subprocess.run(["pgrep", "-af", "image-queue.py"],
+                             capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None, None
+    for line in out.stdout.splitlines():
+        pid, _, argv = line.partition(" ")
+        if "image-queue.py" in argv and pid.strip().isdigit():
+            return int(pid), argv
+    return None, None
+
+
+def spawn_queue(root, dbs, presets, jobs=1, skip_done=True, keep_going=True):
+    """Spawn image-queue.py detached over several DBs. Returns (log_path, pid)."""
+    dbs = [d for d in dbs if d and os.path.isfile(d)]
+    if not dbs:
+        raise ValueError("no valid databases selected")
+    stages = _merge_preset_stages(presets)
+    if not stages:
+        raise ValueError("no stages resolved from presets")
+
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log_path = os.path.join(_queue_log_dir(root), f"queue-{ts}.log")
+    with open(log_path, "a") as fh:
+        fh.write(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] "
+                 f"queue spawned: {len(dbs)} image(s), jobs={jobs}, "
+                 f"presets={','.join(presets)}\n")
+
+    cmd = build_queue_cmd(dbs, stages, jobs, skip_done, keep_going)
+    logfh = open(log_path, "a")
+    proc = subprocess.Popen(cmd, stdout=logfh, stderr=subprocess.STDOUT,
+                            start_new_session=True)
+    return log_path, proc.pid
+
+
+def page_queue(root):
+    """GET /queue — pick images + presets and launch a multi-image batch."""
+    if not PIPELINE_PRESETS:
+        return page("Queue", '<div class="panel err">image-pipeline.py failed to load.</div>')
+    dbs = find_databases(root)
+    qpid, _ = queue_active()
+
+    active = ""
+    if qpid:
+        active = (f'<div class="panel" style="border-left:4px solid #22aa44">'
+                  f'<span class="badge running">running</span> a queue is active '
+                  f'(pid {qpid}). <a href="/queue_log">view queue log</a></div>')
+
+    # image checkboxes (default all checked)
+    img_rows = ""
+    for db_path in dbs:
+        st = _home_db_stats(db_path)
+        img_name = (Path(st["image_path"]).name
+                    if st["image_path"] not in ("", "?") else Path(db_path).name)
+        enc = h(db_path)
+        img_rows += (
+            f'<label style="display:block;padding:3px 0;cursor:pointer">'
+            f'<input type="checkbox" name="db" value="{enc}" checked style="margin-right:8px">'
+            f'{h(img_name)} '
+            f'<span style="color:var(--sub);font-size:11px">{h(_human_size(st["image_size"]))}</span> '
+            f'<span style="margin-left:6px">{_stage_group_chips(st["stage_status"])}</span>'
+            f'</label>'
+        )
+
+    preset_boxes = "".join(
+        f'<label style="display:inline-block;margin-right:14px;cursor:pointer">'
+        f'<input type="checkbox" name="preset" value="{h(name)}"'
+        f'{" checked" if name == "fast" else ""}> <b>{h(name)}</b> '
+        f'<span style="color:var(--sub);font-size:11px">{" &rarr; ".join(stages)}</span>'
+        f'</label>'
+        for name, stages in PIPELINE_PRESETS.items()
+    )
+
+    recent = sorted(glob.glob(os.path.join(_queue_log_dir(root), "queue-*.log")),
+                    key=os.path.getmtime, reverse=True)[:5]
+    recent_html = ""
+    if recent:
+        items = "".join(
+            f'<li><a href="/queue_log?log={urllib.parse.quote(p)}">{h(os.path.basename(p))}</a></li>'
+            for p in recent)
+        recent_html = (f'<div class="panel"><h2>Recent queue runs</h2>'
+                       f'<ul style="margin-left:20px">{items}</ul></div>')
+
+    body = f"""
+    {active}
+    <div class="panel">
+      <h2>Queue work across images</h2>
+      <form method="post" action="/queue">
+        <p class="count">Pick presets to run on each selected image. Images on a
+          spinning pool are processed fastest <b>sequentially</b>; parallel only
+          helps light, metadata stages.</p>
+        <div style="margin:8px 0">{preset_boxes}</div>
+        <div style="margin:10px 0;display:flex;gap:16px;align-items:center;flex-wrap:wrap">
+          <label>Mode:
+            <select name="jobs">
+              <option value="1">Sequential (1 at a time)</option>
+              <option value="2">Parallel — 2</option>
+              <option value="3">Parallel — 3</option>
+              <option value="4">Parallel — 4</option>
+            </select>
+          </label>
+          <label><input type="checkbox" name="skip_done" value="1" checked> skip stages already ok</label>
+          <label><input type="checkbox" name="keep_going" value="1" checked> keep going on failure</label>
+        </div>
+        <fieldset style="border:1px solid var(--accent);border-radius:4px;padding:8px">
+          <legend style="padding:0 6px">Images ({len(dbs)})
+            <a href="#" onclick="for(var e of document.querySelectorAll('[name=db]'))e.checked=true;return false">all</a> /
+            <a href="#" onclick="for(var e of document.querySelectorAll('[name=db]'))e.checked=false;return false">none</a>
+          </legend>
+          {img_rows or '<p class="count">No images found.</p>'}
+        </fieldset>
+        <button type="submit" style="margin-top:12px" {"disabled" if qpid else ""}>
+          {"Queue is already running" if qpid else "Start queue"}
+        </button>
+      </form>
+    </div>
+    {recent_html}
+    """
+    return page("Queue", body, nav_extra=" &rsaquo; queue")
+
+
+def page_queue_log(root, log_path, tail_kb=64):
+    """Tail a queue log (validated to live under the queue-log dir)."""
+    qdir = os.path.realpath(_queue_log_dir(root))
+    if not log_path:
+        recent = sorted(glob.glob(os.path.join(qdir, "queue-*.log")),
+                        key=os.path.getmtime, reverse=True)
+        if not recent:
+            return page("Queue Log", '<div class="panel"><p>No queue logs yet. '
+                        '<a href="/queue">Start one</a>.</p></div>', nav_extra=" &rsaquo; queue log")
+        log_path = recent[0]
+    real = os.path.realpath(log_path)
+    if not (real.startswith(qdir + os.sep) and os.path.isfile(real)):
+        return page("Queue Log", '<div class="panel err">log path not allowed</div>',
+                    nav_extra=" &rsaquo; queue log")
+    size = os.path.getsize(real)
+    with open(real, "rb") as fh:
+        if size > tail_kb * 1024:
+            fh.seek(-tail_kb * 1024, os.SEEK_END)
+            fh.readline()
+        text = fh.read().decode("utf-8", errors="replace")
+    qpid, _ = queue_active()
+    refresh = '<meta http-equiv="refresh" content="4">' if qpid else ""
+    state = ('<span class="badge running">running</span>' if qpid
+             else '<span class="badge ok">idle</span>')
+    body = f"""<div class="panel">
+      <p>{state} &nbsp; <code>{h(real)}</code> &nbsp; ({size:,} bytes)
+         &nbsp; <a href="/queue">&larr; Queue</a></p>
+      <pre class="mono" style="background:#0d1117;padding:10px;border-radius:4px;
+            max-height:70vh;overflow:auto;font-size:12px">{h(text)}</pre>
+    </div>"""
+    return page("Queue Log", body, nav_extra=" &rsaquo; queue log", head_extra=refresh)
 
 
 def page_pipeline_log(db_path, log_path, tail_kb=64):
@@ -2093,6 +2382,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             elif p == "/pipeline_log":
                 log_path = self.qsval("log")
                 self.send_html(page_pipeline_log(db, log_path))
+            elif p == "/queue":
+                self.send_html(page_queue(self.root))
+            elif p == "/queue_log":
+                self.send_html(page_queue_log(self.root, self.qsval("log")))
             else:
                 self.send_html(page("404", "<p>Not found.</p>"), 404)
         except Exception as e:
@@ -2156,6 +2449,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("Location",
                 f'/pipeline_log?db={urllib.parse.quote(db)}'
                 f'&log={urllib.parse.quote(log_path)}')
+            self.end_headers()
+        elif p == "/queue":
+            sel_dbs = params.get("db", [])
+            presets = params.get("preset", [])
+            try:
+                jobs = max(1, min(4, int(pval("jobs", "1") or "1")))
+            except ValueError:
+                jobs = 1
+            if not sel_dbs or not presets:
+                self.send_html(page("Queue",
+                    '<p class="err">Select at least one image and one preset.</p>'
+                    '<p><a href="/queue">&larr; back</a></p>'), 400)
+                return
+            if queue_active()[0]:
+                self.send_response(302)
+                self.send_header("Location", "/queue_log")
+                self.end_headers()
+                return
+            try:
+                log_path, _pid = spawn_queue(
+                    self.root, sel_dbs, presets, jobs=jobs,
+                    skip_done=(pval("skip_done") == "1"),
+                    keep_going=(pval("keep_going") == "1"),
+                )
+            except Exception as e:
+                self.send_html(page("Queue",
+                    f'<p class="err">queue failed: {h(str(e))}</p>'
+                    f'<p><a href="/queue">&larr; back</a></p>'), 500)
+                return
+            self.send_response(302)
+            self.send_header("Location", f'/queue_log?log={urllib.parse.quote(log_path)}')
             self.end_headers()
         else:
             self.send_html(page("405", "<p>Method not allowed.</p>"), 405)

@@ -160,7 +160,22 @@ def smoke(port: int, db_path: str, jpeg: Path) -> int:
     import gzip as _gz
     home_txt = _gz.decompress(body).decode("utf-8", "replace")
     check("home shows build footer", "build " in home_txt, "no footer")
-    check("home lists sample DB", "sample.img.analysis.sqlite" in home_txt)
+    check("home shows image name (not db filename)", ">sample.img</a>" in home_txt)
+    check("home has Size + Stages columns", ">Size<" in home_txt and ">Stages<" in home_txt)
+    check("home shows human image size", "298.1 GB" in home_txt, "image_size_bytes not rendered")
+    check("home shows stage-group chips", 'class="chip' in home_txt and ">fast</span>" in home_txt)
+
+    # queue page: lists images + presets, has the start control
+    st, hd, body = req(port, "/queue")
+    q = body.decode("utf-8", "replace")
+    check("GET /queue → 200", st == 200, f"status={st}")
+    check("queue lists the image", "sample.img" in q)
+    check("queue offers presets + start", 'name="preset" value="fast"' in q and "Start queue" in q)
+    # POST /queue with nothing selected must validate (400), not spawn anything
+    c = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+    c.request("POST", "/queue", body="", headers={"Content-Type": "application/x-www-form-urlencoded"})
+    rp = c.getresponse(); rp.read(); c.close()
+    check("POST /queue empty → 400", rp.status == 400, f"status={rp.status}")
 
     # DB detail page renders the stage history we seeded
     st, hd, body = req(port, f"/db?db={enc_db}")
