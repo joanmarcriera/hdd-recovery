@@ -75,9 +75,13 @@
     thin entrypoint; keep the public routes unchanged; add or preserve focused
     unit coverage after each extraction; keep `./tests/run-unit.sh` green.
   - Progress: `lib/serve_auth.py` + `lib/serve_mapfile.py` extracted (with new
-    `test_serve_mapfile.py`); entrypoint re-imports them, suite green.
-  - Remaining: page_* renderers, db/util helpers, and the request Handler.
-    Best done where the running server can be exercised end-to-end.
+    `test_serve_mapfile.py`); `lib/serve_db.py` extracted for read-only SQL
+    helpers and analysis-DB discovery (with new `test_serve_db.py`). Entrypoint
+    re-imports these helpers so existing route code/tests keep working; suite
+    green at 129 tests.
+  - Remaining: page_* renderers, generic HTML/format helpers, queue-log helpers,
+    and the request Handler. The full Handler/route split is best done where the
+    running server can be exercised end-to-end.
 
 ## Backlog
 

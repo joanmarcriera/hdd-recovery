@@ -8,7 +8,7 @@ a given root directory.  All SQL executed is restricted to SELECT/WITH.
 Usage:
   image-serve.py [--root DIR] [--port PORT] [--host HOST]
 """
-import argparse, base64, binascii, glob, gzip, hashlib, hmac, html, http.server, importlib.util, io, json, mimetypes, os, re
+import argparse, glob, gzip, hashlib, html, http.server, importlib.util, io, json, mimetypes, os, re
 import shlex, sqlite3, subprocess, sys, tempfile, threading, time, urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +35,15 @@ from lib.serve_auth import (  # noqa: E402,F401
     _constant_time_equal,
     _webui_auth_config,
     _webui_auth_ok,
+)
+from lib.serve_db import (  # noqa: E402,F401
+    _DISCOVERY_MAX_DEPTH,
+    _DISCOVERY_PRUNE,
+    db_export_root,
+    find_databases,
+    query_scalar,
+    run_query,
+    safe_sql,
 )
 from lib.serve_mapfile import (  # noqa: E402
     MAP_STATUS as _MAP_STATUS,
@@ -185,41 +194,6 @@ def page(title, body, db_name="", nav_extra="", head_extra=""):
 <style>{CSS}</style>{head_extra}</head><body>{nav}<h1>{h(title)}</h1>{body}
 {footer}<script>{SORT_JS}</script></body></html>"""
 
-def safe_sql(sql):
-    stripped = sql.strip().lstrip(";").strip()
-    upper = stripped.upper()
-    if not re.match(r"\s*(SELECT|WITH)\b", upper):
-        raise ValueError("Only SELECT and WITH queries are allowed.")
-    for bad in ("INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER",
-                "ATTACH", "DETACH", "PRAGMA", "VACUUM", "REINDEX"):
-        if re.search(r"\b" + bad + r"\b", upper):
-            raise ValueError(f"Disallowed keyword: {bad}")
-    return stripped
-
-def run_query(db_path, sql, params=(), limit=5000):
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    conn.row_factory = sqlite3.Row
-    try:
-        cur = conn.execute(sql, params)
-        rows = cur.fetchmany(limit)
-        cols = [d[0] for d in cur.description or []]
-        return cols, rows
-    finally:
-        conn.close()
-
-def query_scalar(db_path, sql, default=None):
-    try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        row = conn.execute(sql).fetchone()
-        conn.close()
-        return row[0] if row else default
-    except Exception:
-        return default
-
-
-def db_export_root(db_path):
-    return query_scalar(db_path, "SELECT export_root FROM image_info WHERE id=1", "") or ""
-
 def table_html(cols, rows, max_cell=300):
     if not rows:
         return '<p class="count">No rows.</p>'
@@ -236,35 +210,6 @@ def table_html(cols, rows, max_cell=300):
         buf += "</tr>"
     buf += "</table></div>"
     return buf
-
-# ── database discovery ────────────────────────────────────────────────────────
-
-# Analysis DBs live beside images (e.g. <root>/images/*.analysis.sqlite). These
-# subdirectories never contain DBs but can hold millions of carved/feature files
-# — a recursive '**' glob over them took 20-40 s on a real export tree. Pruning
-# them (plus a depth cap) makes discovery effectively instant.
-_DISCOVERY_PRUNE = {
-    "exports", "recovered", "indexes", "winmem", "photorec", "carved",
-    "hits", "state", "reports", "logs", "manifests", "structure",
-}
-_DISCOVERY_MAX_DEPTH = 4
-
-
-def find_databases(root, max_depth=_DISCOVERY_MAX_DEPTH):
-    root = os.path.abspath(root)
-    base = root.rstrip(os.sep).count(os.sep)
-    found = []
-    for dirpath, dirnames, filenames in os.walk(root):
-        depth = dirpath.count(os.sep) - base
-        if depth >= max_depth:
-            dirnames[:] = []
-        else:
-            dirnames[:] = [d for d in dirnames
-                           if d.lower() not in _DISCOVERY_PRUNE and not d.startswith(".")]
-        for fn in filenames:
-            if fn.endswith(".analysis.sqlite"):
-                found.append(os.path.join(dirpath, fn))
-    return sorted(set(found))
 
 # ── memory / swap status ─────────────────────────────────────────────────────
 
