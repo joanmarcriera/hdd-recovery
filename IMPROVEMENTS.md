@@ -175,7 +175,14 @@ When a stage is pending because prerequisites are not done, the TUI shows `pendi
 
 ---
 
-### 14. Ollama availability not pre-checked before tag-photos stage
+### 14. Ollama availability not pre-checked before tag-photos stage — DONE (2026-06-20)
+
+> `tui/ollama.py` probes each host's `/api/tags` (textual-free, unit-tested with
+> an injected opener). The tag-photos config screen probes on mount and on a
+> `Check [C]` button, shows green/red per-host status, and blocks Run only when a
+> completed probe proves every host is down — so a slow/failed probe never locks
+> the operator out. Tests in `tests/unit/test_ollama.py`.
+
 
 If Ollama is unreachable, the tagging job starts, opens a `scan_runs` record, then immediately fails with an unhelpful connection error — leaving a `failed` stage that needs manual cleanup.
 
