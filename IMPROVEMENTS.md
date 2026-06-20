@@ -417,8 +417,14 @@ durable, **progress-aware** run supervisor. Eight findings (F1–F8).
   `CRACK_WALLET_MAX_RUNTIME` (default 12h), and marks timeout/termination as
   `paused` while preserving the restore checkpoint path. Tests in
   `tests/unit/test_crack_progress.py`.
+- **F7 — Stuckness in the monitor.** Added `tui/activity.py` for process
+  CPU/IO delta sampling and pure activity classification. The SystemBar now
+  appends active / idle / no-output / probably-stuck labels with judgment
+  sources for matched running scan rows, using `scan_runs.last_progress_at`,
+  `heartbeat_at`, and process samples. Tests in
+  `tests/unit/test_monitor_activity.py`.
 
 ### Pending (bigger, build on F2's durable columns)
 
-- **F7 — Stuckness in the monitor.** Compare current vs prior activity; show
-  active / idle Nm / no output Nh / probably stuck, with the source of the call.
+No F-series unattended-run robustness items remain pending from the 2026-06-20
+Codex review.

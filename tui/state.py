@@ -122,6 +122,10 @@ class ScanRun:
     log_path: Optional[str]
     output_dir: Optional[str]
     notes: Optional[str]
+    pid: Optional[int] = None
+    pgid: Optional[int] = None
+    heartbeat_at: Optional[str] = None
+    last_progress_at: Optional[str] = None
 
 
 @dataclass
@@ -331,8 +335,19 @@ def _load_scan_runs(db_path: Path) -> list[ScanRun]:
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=3)
         conn.row_factory = sqlite3.Row
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(scan_runs)")}
+        optional = {
+            "pid": "pid" if "pid" in cols else "NULL AS pid",
+            "pgid": "pgid" if "pgid" in cols else "NULL AS pgid",
+            "heartbeat_at": "heartbeat_at" if "heartbeat_at" in cols else "NULL AS heartbeat_at",
+            "last_progress_at": (
+                "last_progress_at" if "last_progress_at" in cols else "NULL AS last_progress_at"
+            ),
+        }
         rows = conn.execute(
-            "SELECT id,stage,status,started_at,ended_at,command_line,log_path,output_dir,notes "
+            "SELECT id,stage,status,started_at,ended_at,command_line,log_path,output_dir,notes,"
+            f"{optional['pid']},{optional['pgid']},"
+            f"{optional['heartbeat_at']},{optional['last_progress_at']} "
             "FROM scan_runs ORDER BY id"
         ).fetchall()
         conn.close()
@@ -342,6 +357,9 @@ def _load_scan_runs(db_path: Path) -> list[ScanRun]:
                 started_at=r["started_at"], ended_at=r["ended_at"],
                 command_line=r["command_line"], log_path=r["log_path"],
                 output_dir=r["output_dir"], notes=r["notes"],
+                pid=r["pid"], pgid=r["pgid"],
+                heartbeat_at=r["heartbeat_at"],
+                last_progress_at=r["last_progress_at"],
             )
             for r in rows
         ]

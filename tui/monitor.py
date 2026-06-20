@@ -14,6 +14,7 @@ from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import Static
 
+from activity import ActivitySample, ProcessActivitySampler, age_seconds, classify_activity
 from devices import resolve_dest_dev
 from state import DiskInfo, fmt_elapsed
 
@@ -58,6 +59,20 @@ def _recovery_pgrep() -> str:
         _PGREP_CACHE["ts"] = time.monotonic()
         _PGREP_CACHE["out"] = out
     return out
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +202,7 @@ def _mem_summary() -> str:
 def _running_proc_info(
     disk: Optional[DiskInfo],
     disks: Optional[list[DiskInfo]] = None,
+    activity_sampler: Optional[ProcessActivitySampler] = None,
 ) -> Optional[str]:
     """
     Return short running-stage summaries.
@@ -195,14 +211,22 @@ def _running_proc_info(
     supplied, this describes every disk with a live running scan row.
     """
     if disk:
-        summary = _running_disk_summary(disk, include_tail_hint=True)
+        summary = _running_disk_summary(
+            disk,
+            include_tail_hint=True,
+            activity_sampler=activity_sampler,
+        )
         if summary:
             return summary
 
     if disks:
         summaries = []
         for d in disks:
-            summary = _running_disk_summary(d, include_disk_name=True)
+            summary = _running_disk_summary(
+                d,
+                include_disk_name=True,
+                activity_sampler=activity_sampler,
+            )
             if summary:
                 summaries.append(summary)
         if summaries:
@@ -231,6 +255,7 @@ def _running_disk_summary(
     disk: DiskInfo,
     include_disk_name: bool = False,
     include_tail_hint: bool = False,
+    activity_sampler: Optional[ProcessActivitySampler] = None,
 ) -> Optional[str]:
     if not disk.db_exists:
         return None
@@ -244,15 +269,17 @@ def _running_disk_summary(
     for run in reversed(runs):
         if run.status != "running":
             continue
-        if not _pgrep_alive(disk):
+        pid = _pgrep_match(disk)
+        if pid is None:
             continue
         elapsed = _elapsed(run.started_at)
         prefix = "[cyan]⟳[/cyan]"
+        activity = _activity_fragment(run, pid, activity_sampler)
         if include_disk_name:
             name = _short_disk_name(disk)
-            return f"{prefix} [bold]{name}[/bold]: {run.stage} {elapsed}"
+            return f"{prefix} [bold]{name}[/bold]: {run.stage} {elapsed}{activity}"
         log_hint = "  [dim][T] tail log[/dim]" if include_tail_hint and run.log_path else ""
-        return f"{prefix} [bold]{run.stage}[/bold]  {elapsed}{log_hint}"
+        return f"{prefix} [bold]{run.stage}[/bold]  {elapsed}{activity}{log_hint}"
     return None
 
 
@@ -267,7 +294,7 @@ def _short_disk_name(disk: DiskInfo) -> str:
     return name
 
 
-def _pgrep_alive(disk: DiskInfo) -> bool:
+def _pgrep_match(disk: DiskInfo) -> Optional[int]:
     out = _recovery_pgrep()
     needles = [
         disk.basename,
@@ -275,7 +302,48 @@ def _pgrep_alive(disk: DiskInfo) -> bool:
         str(disk.db_path),
         str(disk.export_root),
     ]
-    return any(n and n in out for n in needles)
+    for line in out.splitlines():
+        pid_raw, _, cmd = line.partition(" ")
+        if not pid_raw.isdigit():
+            continue
+        if any(n and n in cmd for n in needles):
+            return int(pid_raw)
+    return None
+
+
+def _pgrep_alive(disk: DiskInfo) -> bool:
+    return _pgrep_match(disk) is not None
+
+
+def _activity_fragment(
+    run,
+    pid: int,
+    activity_sampler: Optional[ProcessActivitySampler],
+) -> str:
+    if activity_sampler is None:
+        return ""
+    proc = activity_sampler.sample(pid)
+    now = datetime.now(timezone.utc)
+    stuck_s = _env_int(
+        "MONITOR_STUCK_SECONDS",
+        _env_int("STAGE_PROGRESS_TIMEOUT", 3600),
+    )
+    if stuck_s <= 0:
+        stuck_s = 365 * 24 * 3600
+    judgment = classify_activity(
+        ActivitySample(
+            cpu_pct=proc.cpu_pct,
+            io_mib_s=proc.io_mib_s,
+            last_progress_age_s=age_seconds(getattr(run, "last_progress_at", None), now),
+            heartbeat_age_s=age_seconds(getattr(run, "heartbeat_at", None), now),
+            started_age_s=age_seconds(getattr(run, "started_at", None), now),
+        ),
+        active_cpu_pct=_env_float("MONITOR_ACTIVE_CPU_PCT", 1.0),
+        active_io_mib_s=_env_float("MONITOR_ACTIVE_IO_MBPS", 0.1),
+        recent_progress_s=_env_int("MONITOR_RECENT_PROGRESS_SECONDS", 120),
+        stuck_s=stuck_s,
+    )
+    return f"  [{judgment.style}]{judgment.label}[/{judgment.style}] [dim]{judgment.source}[/dim]"
 
 
 def _elapsed(started_at_utc: str) -> str:
@@ -337,6 +405,7 @@ class SystemBar(Widget):
         self.disks = disks or []
         self._cpu = _CpuSampler()
         self._disk = _DiskSampler()
+        self._proc_activity = ProcessActivitySampler()
         self._label: Optional[Static] = None
 
     def compose(self) -> ComposeResult:
@@ -377,7 +446,11 @@ class SystemBar(Widget):
             if src and src != _DISK_DEV:
                 devs.append(src)
             devs.extend(lp for lp in active_loops if lp not in devs)
-            proc_info = _running_proc_info(self.disk, self.disks)
+            proc_info = _running_proc_info(
+                self.disk,
+                self.disks,
+                activity_sampler=self._proc_activity,
+            )
             mem_info  = _mem_summary()
             self.app.call_from_thread(self._redraw, cpu_pct, io, devs, src, proc_info, mem_info)
         except Exception as exc:

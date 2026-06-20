@@ -36,13 +36,13 @@
     runtime; preserve checkpoint/restore behavior; add focused tests without
     requiring GPU/hashcat.
 
-## Next
-
-- [ ] F7 stuckness in the monitor.
+- [x] F7 stuckness in the monitor.
   - Completion criteria: compare current vs prior activity using CPU/IO samples
     and `scan_runs.last_progress_at`; show active, idle, no-output, or probably
     stuck with the source of the judgment; add focused tests without touching
     source media.
+
+## Next
 
 - [ ] #18 split `bin/image-serve.py`.
   - Completion criteria: extract cohesive route/page/db/util modules behind a

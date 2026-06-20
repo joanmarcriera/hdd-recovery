@@ -1,5 +1,42 @@
 # Decisions
 
+## 2026-06-20 — Monitor Stuckness Uses Process Activity First
+
+**Decision:** F7 classifies running TUI stages using per-process CPU and I/O
+deltas first, then `scan_runs.last_progress_at`, `heartbeat_at`, and
+`started_at` ages. The SystemBar displays `active`, `idle <age>`,
+`no output <age>`, or `probably stuck` with a short source such as CPU, process
+I/O, last progress, heartbeat, or missing progress timestamp.
+
+**Alternatives considered:**
+
+- Classify stuckness from elapsed runtime alone.
+- Use only `last_progress_at`.
+- Sample only whole-disk I/O rather than process-level counters.
+
+**Rationale:** A long-running forensic tool can be healthy even when useful
+progress has not advanced recently, if it is still consuming CPU or doing real
+I/O. Conversely, elapsed time by itself does not distinguish a slow scan from a
+stalled finalization loop. Process counters provide a cheap current-activity
+signal, while F3's progress timestamps provide durable useful-progress context.
+
+**Consequences:**
+
+- The first tick after a process is observed may rely on DB timestamps because
+  CPU/I/O deltas need two samples.
+- Detailed stuckness appears when the monitor can match a running `scan_runs`
+  row to a live process; generic pgrep fallback remains elapsed-only.
+- Thresholds are tunable through `MONITOR_ACTIVE_CPU_PCT`,
+  `MONITOR_ACTIVE_IO_MBPS`, `MONITOR_RECENT_PROGRESS_SECONDS`, and
+  `MONITOR_STUCK_SECONDS`.
+
+**Revisit if:**
+
+- Multi-process stages need child-process aggregation beyond the matched pgrep
+  PID.
+- Queue-level monitoring needs continuous `supervised_runs.last_progress_at`
+  mirroring rather than per-image `scan_runs` timestamps.
+
 ## 2026-06-20 — Hashcat Runtime Expiry Pauses Crack Tasks
 
 **Decision:** F5 treats a wallet-cracking runtime expiry as a paused crack task,
