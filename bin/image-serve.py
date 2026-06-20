@@ -1226,13 +1226,13 @@ def page_db(db_path):
 
 def page_wallets(db_path, limit=200):
     try:
-        cols, rows = run_query(db_path, f"""
+        cols, rows = run_query(db_path, """
             SELECT wc.score, wc.reason, wc.source_stage,
                    f.name, f.path, f.size_bytes, wc.details, wc.created_at
             FROM   wallet_candidates wc
             LEFT JOIN files f ON f.id = wc.file_id
             ORDER  BY wc.score DESC, f.path
-            LIMIT  {limit}""")
+            LIMIT  ?""", (limit,))
         body = f'<div class="panel">{table_html(cols, rows)}</div>'
     except Exception as e:
         body = f'<div class="panel err">{h(str(e))}</div>'
@@ -1245,14 +1245,14 @@ def page_pictures(db_path, limit=500):
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
-        cand_rows = conn.execute(f"""
+        cand_rows = conn.execute("""
             SELECT f.id AS file_id, pc.score, pc.reason,
                    pc.camera_model, pc.taken_at, pc.width, pc.height,
                    f.name, f.path, f.size_bytes
             FROM   picture_candidates pc
             LEFT JOIN files f ON f.id = pc.file_id
             ORDER  BY pc.score DESC, f.path
-            LIMIT  {limit}""").fetchall()
+            LIMIT  ?""", (limit,)).fetchall()
         conn.close()
 
         if not cand_rows:
@@ -1295,7 +1295,8 @@ def page_pictures(db_path, limit=500):
         conn.row_factory = sqlite3.Row
         img_rows = conn.execute(
             "SELECT method, mime_type, size_bytes, relative_path, full_path FROM recovered_artifacts "
-            f"WHERE mime_type LIKE 'image/%' ORDER BY method, mime_type, size_bytes DESC LIMIT {limit}"
+            "WHERE mime_type LIKE 'image/%' ORDER BY method, mime_type, size_bytes DESC LIMIT ?",
+            (limit,)
         ).fetchall()
         conn.close()
 
@@ -1356,15 +1357,15 @@ def page_files(db_path, pattern="", limit=500):
     results_html = ""
     if pattern:
         try:
-            sql = f"""SELECT f.name, f.path, f.size_bytes, f.mtime,
+            sql = """SELECT f.name, f.path, f.size_bytes, f.mtime,
                              f.allocated, f.deleted, fs.fs_type
                       FROM files f
                       LEFT JOIN filesystems fs ON fs.partition_id = f.partition_id
                       WHERE f.path LIKE ? OR f.name LIKE ?
-                      ORDER BY f.size_bytes DESC LIMIT {limit}"""
+                      ORDER BY f.size_bytes DESC LIMIT ?"""
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(sql, (pattern, pattern)).fetchmany(limit)
+            rows = conn.execute(sql, (pattern, pattern, limit)).fetchmany(limit)
             cols = ["name", "path", "size_bytes", "mtime",
                     "allocated", "deleted", "fs_type"]
             conn.close()
@@ -1805,11 +1806,12 @@ def page_gallery_fs(db_path, pg=0, per_page=48, all_images=False,
                     f"ORDER BY {order_sql}, f.path")
 
         if all_images:
-            rows = conn.execute(base_sql + f" LIMIT {GALLERY_ALL_CAP}", params).fetchall()
+            rows = conn.execute(base_sql + " LIMIT ?",
+                                [*params, GALLERY_ALL_CAP]).fetchall()
         else:
             offset = pg * per_page
-            rows = conn.execute(base_sql + f" LIMIT {per_page} OFFSET {offset}",
-                                params).fetchall()
+            rows = conn.execute(base_sql + " LIMIT ? OFFSET ?",
+                                [*params, per_page, offset]).fetchall()
         conn.close()
     except Exception as e:
         return page("Image Gallery (filesystem)",
@@ -2035,11 +2037,12 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
         )
 
         if all_images:
-            rows = conn.execute(base_sql + f" LIMIT {GALLERY_ALL_CAP}", params).fetchall()
+            rows = conn.execute(base_sql + " LIMIT ?",
+                                [*params, GALLERY_ALL_CAP]).fetchall()
         else:
             offset = pg * per_page
-            rows = conn.execute(base_sql + f" LIMIT {per_page} OFFSET {offset}",
-                                params).fetchall()
+            rows = conn.execute(base_sql + " LIMIT ? OFFSET ?",
+                                [*params, per_page, offset]).fetchall()
         conn.close()
     except Exception as e:
         return page("Image Gallery", f'<div class="panel err">{h(str(e))}</div>',
@@ -2572,6 +2575,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_html(page_pipeline_log(db, log_path))
             elif p == "/queue":
                 self.send_html(page_queue(self.root))
+            elif p == "/api/queue":
+                # Machine-readable queue progress for monitoring/automation.
+                qpid, _ = queue_active()
+                qdir = os.path.realpath(_queue_log_dir(self.root))
+                logs = sorted(glob.glob(os.path.join(qdir, "queue-*.log")),
+                              key=os.path.getmtime, reverse=True)
+                prog = _queue_progress_cached(logs[0]) if logs else None
+                out = {"running": bool(qpid), "queue_pid": qpid,
+                       "log": logs[0] if logs else None, "progress": prog}
+                self.send_bytes_cached(json.dumps(out).encode("utf-8"),
+                                       "application/json", "", max_age=0)
             elif p == "/queue_log":
                 if self.qsval("raw") == "1":
                     payload = queue_log_payload(self.root, self.qsval("log"))
