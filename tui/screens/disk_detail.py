@@ -15,7 +15,7 @@ from textual.widgets import DataTable, Footer, Header, Label, Static
 
 from executor import build_command, command_display, has_concurrent_db_writer
 from monitor import SystemBar
-from stages import STAGES, StageDef, STAGE_BY_KEY, clean_markup
+from stages import STAGES, StageDef, STAGE_BY_KEY, clean_markup, unmet_prior_keys
 from state import (
     DiskInfo, StageStatus, ICON,
     count_done, fmt_bytes, get_stage_status, get_stage_note,
@@ -227,6 +227,12 @@ class DiskDetailScreen(Screen):
         if stage:
             self._show_detail(stage)
 
+    def _unmet_prerequisites(self, stage: StageDef) -> list[str]:
+        """requires_prior stage keys that are not yet DONE, in declared order.
+        Uses the already-computed status map so it reflects live state."""
+        done = {k for k, v in self._statuses.items() if v == StageStatus.DONE}
+        return unmet_prior_keys(stage, done)
+
     def _show_detail(self, stage: StageDef) -> None:  # noqa: C901
         panel = self.query_one("#detail-panel", StageDetailPanel)
         st = self._statuses.get(stage.key, StageStatus.PENDING)
@@ -235,6 +241,19 @@ class DiskDetailScreen(Screen):
         lines: list[str] = []
         lines.append(f"[bold]{stage.number}. {stage.name}[/bold]")
         lines.append(f"Status: [{style}]{char} {st.value}[/{style}]")
+
+        # Explain why a not-yet-run stage can't proceed: which prerequisite
+        # stages still need to complete first (#12). Skipped for already
+        # running/done stages where the answer is moot.
+        if st not in (StageStatus.RUNNING, StageStatus.DONE):
+            unmet = self._unmet_prerequisites(stage)
+            if unmet:
+                names = ", ".join(
+                    f"{STAGE_BY_KEY[k].number}. {STAGE_BY_KEY[k].name}"
+                    if k in STAGE_BY_KEY else k
+                    for k in unmet
+                )
+                lines.append(f"[yellow]⤷ Blocked — requires first: {names}[/yellow]")
         lines.append("")
 
         for ln in stage.description.splitlines():

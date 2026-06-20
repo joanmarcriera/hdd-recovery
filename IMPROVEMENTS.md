@@ -155,7 +155,13 @@ The same `wallet.dat` found by TSK index, carving, and ext recovery creates 3 se
 
 ---
 
-### 12. TUI doesn't explain why a stage is blocked
+### 12. TUI doesn't explain why a stage is blocked — DONE (2026-06-20)
+
+> The disk-detail panel now shows a "Blocked — requires first: …" banner listing
+> the prerequisite stages that aren't DONE yet for any not-yet-run stage. Pure
+> helper `unmet_prior_keys()` in `tui/stages.py` (tested in
+> `tests/unit/test_pipeline.py`); the screen delegates to it.
+
 
 When a stage is pending because prerequisites are not done, the TUI shows `pending` with no explanation. The operator has no way to know what needs to run first without reading `tui/stages.py` directly.
 

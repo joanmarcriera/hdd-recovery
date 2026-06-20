@@ -1170,3 +1170,11 @@ STAGES: list[StageDef] = [
 
 STAGE_BY_KEY: dict[str, StageDef] = {s.key: s for s in STAGES}
 TOTAL_STAGES = len(STAGES)
+
+
+def unmet_prior_keys(stage: StageDef, done_keys) -> list[str]:
+    """The stage's requires_prior keys that are not in done_keys, in declared
+    order. Pure helper so the TUI can explain why a stage is blocked (#12)
+    without re-deriving prerequisite logic in the screen."""
+    done = set(done_keys)
+    return [k for k in (stage.requires_prior or []) if k not in done]
