@@ -2,62 +2,47 @@
 
 ## Current Objective
 
-Complete F7 monitor stuckness: show whether a running stage is active, idle,
-silent/no-output, or probably stuck using process CPU/IO samples and
-`scan_runs` progress timestamps.
+Backlog-driven recovery-effectiveness improvements. Most reliability work
+(F1–F8) has shipped; the focus is now on items that materially increase what the
+pipeline can recover, plus keeping the trackers honest.
 
-## Completed Work
+## Completed Work (2026-06-20 session)
 
-- Added `tui/activity.py` for process CPU/IO delta sampling and pure activity
-  classification.
-- `tui/monitor.py` now keeps one per-process sampler, matches live recovery
-  processes to running scan rows, and appends activity labels with source
-  details to the SystemBar running-stage summary.
-- Activity labels are `active`, `idle <age>`, `no output <age>`, or
-  `probably stuck`; sources include CPU, process I/O, recent progress,
-  last-progress age, heartbeat age, or missing progress timestamp.
-- `tui/state.py` now loads F2/F3 supervision fields (`pid`, `pgid`,
-  `heartbeat_at`, `last_progress_at`) when present while keeping older DBs
-  readable with `NULL` fallbacks.
-- Added `tests/unit/test_monitor_activity.py` for classifier and process
-  sampler behavior.
-- Marked F7 complete in `IMPROVEMENTS.md` and `TASKS.md`.
+- **#7 encrypted-container detection** — new stage `detect-encrypted`
+  (`bin/image-detect-encrypted-containers.sh`). Parses the image partition table
+  for LUKS/BitLocker volumes (no mount) and classifies the recovered corpus +
+  file inventory for KeePass/PGP/encrypted-archive signatures and
+  VeraCrypt/TrueCrypt by entropy+extension. Findings land in SQLite
+  (`source_tool=encrypted-detect`). Pure logic in `lib/encrypted.py`; in the
+  `full`/`wallet` presets.
+- **#9 targeted wordlist generation** — `bin/image-gen-wordlist.sh` builds a
+  disk-targeted password list from `bulk_extractor_hits` (email local-parts,
+  screen names, non-common domain labels), personal candidates first then base
+  (rockyou) appended/deduped. Pure logic in `lib/wordlist.py`; feed via
+  `image-crack-wallet.sh --wordlist`.
+- **#10 RAW photo support** — verified already covered (PhotoRec `--profile
+  broad` enables all RAW formats; `PICTURE_EXTENSIONS` lists cr2/nef/arw/…). Not
+  implemented; documented in `IMPROVEMENTS.md`.
+- **Doc hygiene** — archived the stale 2026-05-04 Kingston handoff
+  (`NEXT-RUN-TODO.md` → `.archive/`), removed stale live-pipeline state from
+  `TODO.md`, refreshed the `image-serve.py` line count.
 
-## Current Implementation State
+## Tests
 
-F7 is implemented and verified locally. The working tree still contains
-pre-existing untracked local metadata directories/files not touched by this
-change.
-
-## Files Changed
-
-- `tui/activity.py`
-- `tui/monitor.py`
-- `tui/state.py`
-- `tests/unit/test_monitor_activity.py`
-- `IMPROVEMENTS.md`
-- `PROJECT_STATE.md`
-- `TASKS.md`
-- `DECISIONS.md`
-
-## Tests Run
-
-- `python3 -m py_compile tui/activity.py tui/monitor.py tui/state.py tests/unit/test_monitor_activity.py` — passed.
-- `python3 -m unittest discover -s tests/unit -p 'test_monitor_activity.py'` — passed, 6 tests.
-- `./tests/run-unit.sh` — passed, 74 tests.
-
-## Unresolved Defects Or Risks
-
-- The first monitor tick for a process has no CPU/IO delta yet, so it may rely
-  on progress timestamps until the next tick.
-- Generic pgrep fallback without a disk/DB context still shows only process
-  elapsed time; detailed stuckness needs a matched running `scan_runs` row.
-
-## Known Blockers
-
-None for F7.
+- `./tests/run-unit.sh` — 106 tests, all passing (added
+  `tests/unit/test_encrypted.py`, `tests/unit/test_wordlist.py`, and registry
+  assertions in `tests/unit/test_pipeline.py`).
+- Both new stages smoke-tested end-to-end against synthetic images/DBs (no source
+  media).
 
 ## Next Recommended Action
 
-Next backlog item is #18 split `bin/image-serve.py`, unless a recovery
-operation needs immediate attention first.
+From `TASKS.md` "Next": **#18 split `bin/image-serve.py`** (maintainability) and
+**#8 wallet-candidate deduplication** (review-noise reduction). Both are below
+the 10%-recovery-benefit bar but are reasonable hygiene work. No higher-leverage
+recovery item is currently outstanding.
+
+## Known Blockers
+
+None. Owner-side fixture/GPU verification items remain tracked in
+`STAGE1-PROGRESS.md`.

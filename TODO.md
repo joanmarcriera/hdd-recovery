@@ -1,16 +1,9 @@
 # TODO - hdd-recovery
 
-This file is the short live TODO. The detailed handoff for the next run is
-`NEXT-RUN-TODO.md`.
-
-## Current Pipeline
-
-- Monitor the running full pipeline for the Kingston SSD image:
-  `/mnt/recovery16tb/recovery/images/20260430_KINGSTON_SV300S37A120G_KINGSTON_SV300S37A120G_50026B733500B53B_sdd.img.analysis.sqlite`
-- Do not start another DB-writing stage for that DB while `image-pipeline.py` is alive.
-- Let `carve-magicrescue` finish or clearly stall, then check `scan_runs` and the pipeline log.
-- Rerun `carve-scalpel` after the current pipeline is idle. Preserve the partial scalpel output first; the earlier run was OOM-killed near the end and the new 100 GiB swap may allow a clean rerun.
-- Finish post-carve stages if the pipeline stops early: `bulk-extractor-recovered`, `text-seed-scan`, `enrich-trid`, `recoll-index`, `ntfs-artifact-summary`, `regripper`, `rifiuti2`, `plaso-timeline`, `photorec-broad`, `dedup-photos`, `wallet-inspect`, `tag-photos`, `generate-report`.
+This file is the short live TODO for durable, forward-looking work. It is **not**
+a per-run operator handoff — live state for an in-flight pipeline belongs in
+`scan_runs` and the pipeline log, not here. Resolved point-in-time handoffs are
+moved to `.archive/` (gitignored).
 
 ## Docker And Verification
 
