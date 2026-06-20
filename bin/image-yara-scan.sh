@@ -41,6 +41,8 @@ done
 [[ -n "$db" ]]        || { usage; exit 1; }
 [[ -f "$db" ]]        || die "database not found: $db"
 [[ -d "$rules_dir" ]] || die "rules directory not found: $rules_dir"
+# Rule->score map lives beside the rules; missing file → built-in defaults.
+scoring_conf="$rules_dir/scoring.conf"
 need_cmd yara
 need_cmd python3
 
@@ -75,16 +77,16 @@ notes=""
   yara --no-warnings -r "$tmpfile" "$corpus_dir" 2>&1 | tee "$out_dir/raw_output.txt" || true
   printf 'YARA scan complete.\n'
 
-python3 - "$db" "$out_dir/raw_output.txt" "$hits_tsv" "$run_id" <<'PY'
+python3 - "$db" "$out_dir/raw_output.txt" "$hits_tsv" "$run_id" "$scoring_conf" <<'PY'
 import csv, os, re, sqlite3, sys
 from datetime import datetime, timezone
 
-db_path, raw_out, hits_tsv, run_id = sys.argv[1:5]
+db_path, raw_out, hits_tsv, run_id, scoring_conf = sys.argv[1:6]
 conn = sqlite3.connect(db_path)
 now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-# YARA output line: rule_name\tfile_path  OR  rule_name  file_path
-SCORE_MAP = {
+# Built-in fallback used when config/yara/scoring.conf is absent/unparseable.
+DEFAULT_SCORE_MAP = {
     'ethereum_keystore':         85,
     'electrum_wallet_json':      80,
     'metamask_encrypted_vault':  85,
@@ -96,6 +98,35 @@ SCORE_MAP = {
     'armored_private_key':       60,
     'mnemonic_wordlist_file':    55,
 }
+
+
+def load_score_map(path, defaults):
+    """Merge rule->score overrides from a key=value file onto the defaults.
+    Returns (score_map, default_score). 'default' key sets the catch-all score."""
+    score_map = dict(defaults)
+    default_score = 50
+    try:
+        with open(path, errors='replace') as fh:
+            for line in fh:
+                line = line.strip()
+                if not line or line.startswith('#') or '=' not in line:
+                    continue
+                k, _, v = line.partition('=')
+                k, v = k.strip(), v.strip()
+                try:
+                    iv = int(v)
+                except ValueError:
+                    continue
+                if k == 'default':
+                    default_score = iv
+                else:
+                    score_map[k] = iv
+    except FileNotFoundError:
+        pass
+    return score_map, default_score
+
+
+SCORE_MAP, DEFAULT_SCORE = load_score_map(scoring_conf, DEFAULT_SCORE_MAP)
 
 hits = []
 try:
@@ -109,7 +140,7 @@ try:
             if len(parts) < 2:
                 continue
             rule_name, file_path = parts[0], parts[1]
-            score = SCORE_MAP.get(rule_name, 50)
+            score = SCORE_MAP.get(rule_name, DEFAULT_SCORE)
             hits.append((rule_name, file_path, score))
 except FileNotFoundError:
     print("Raw YARA output file not found — no hits to import.")
