@@ -1366,16 +1366,54 @@ def page_db(db_path):
     return page(name, body, db_name=db_path, head_extra=head_extra)
 
 
+# One row per candidate FILE, merging the separate rows that detect-wallets,
+# yara-scan, and pdf-extract each create for the same file. Non-destructive: a
+# pure SELECT/GROUP BY that keeps every underlying row (and its provenance)
+# intact — evidence is never deleted (#8). NULL-file_id rows (no indexed file)
+# stay individual via the -wc.id grouping key.
+_WALLET_DEDUP_SQL = """
+    SELECT MAX(wc.score)                      AS score,
+           COUNT(*)                           AS hits,
+           COUNT(DISTINCT wc.source_stage)    AS methods,
+           GROUP_CONCAT(DISTINCT wc.source_stage) AS method_list,
+           GROUP_CONCAT(DISTINCT wc.reason)   AS reasons,
+           f.name                             AS name,
+           COALESCE(f.path, '(no indexed file)') AS path,
+           f.size_bytes                       AS size_bytes,
+           MIN(wc.created_at)                 AS first_seen
+    FROM   wallet_candidates wc
+    LEFT JOIN files f ON f.id = wc.file_id
+    GROUP  BY COALESCE(wc.file_id, -wc.id)
+    ORDER  BY score DESC, path
+    LIMIT  ?"""
+
+
+def wallet_dedup_counts(db_path):
+    """Return (raw_rows, distinct_files): the raw wallet_candidates count and
+    the deduplicated count after merging by file."""
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        raw = conn.execute("SELECT COUNT(*) FROM wallet_candidates").fetchone()[0]
+        deduped = conn.execute(
+            "SELECT COUNT(*) FROM (SELECT 1 FROM wallet_candidates "
+            "GROUP BY COALESCE(file_id, -id))").fetchone()[0]
+    finally:
+        conn.close()
+    return raw, deduped
+
+
 def page_wallets(db_path, limit=200):
     try:
-        cols, rows = run_query(db_path, """
-            SELECT wc.score, wc.reason, wc.source_stage,
-                   f.name, f.path, f.size_bytes, wc.details, wc.created_at
-            FROM   wallet_candidates wc
-            LEFT JOIN files f ON f.id = wc.file_id
-            ORDER  BY wc.score DESC, f.path
-            LIMIT  ?""", (limit,))
-        body = f'<div class="panel">{table_html(cols, rows)}</div>'
+        raw, deduped = wallet_dedup_counts(db_path)
+        cols, rows = run_query(db_path, _WALLET_DEDUP_SQL, (limit,))
+        merged = raw - deduped
+        summary = (f'<p class="count">{deduped} candidate file(s)'
+                   + (f' &mdash; deduplicated from {raw} raw hits across all '
+                      f'discovery methods ({merged} duplicate row(s) merged)'
+                      if merged > 0 else f' ({raw} raw hit(s), no duplicates)')
+                   + '. Every source method is preserved in the Methods column; '
+                   'no evidence is deleted.</p>')
+        body = f'<div class="panel">{summary}{table_html(cols, rows)}</div>'
     except Exception as e:
         body = f'<div class="panel err">{h(str(e))}</div>'
     return page("Wallet Candidates", body, db_name=db_path, nav_extra=' &rsaquo; wallets')

@@ -64,6 +64,35 @@ class TestParameterizedPages(unittest.TestCase):
         self._assert_no_sql_error(html)
         self.assertIn("2 row(s)", html)  # 3 inserted, capped at 2
 
+    def test_wallets_dedup_merges_methods(self):
+        # Fresh DB so this test owns its row counts. File 1 is found by three
+        # discovery stages; the deduped view must merge them into one file row,
+        # preserve all methods, and never delete evidence.
+        db = _make_db()
+        try:
+            conn = sqlite3.connect(db)
+            conn.execute(
+                "INSERT INTO wallet_candidates(file_id,source_stage,score,reason,"
+                "created_at) VALUES (1,'yara',97,'yara:bitcoin_core_wallet_dat',"
+                "'2026-06-20T00:00:00Z')")
+            conn.execute(
+                "INSERT INTO wallet_candidates(file_id,source_stage,score,reason,"
+                "created_at) VALUES (1,'pdf-extract',70,'pdf-keyword',"
+                "'2026-06-20T00:00:00Z')")
+            conn.commit()
+            conn.close()
+            raw, deduped = srv.wallet_dedup_counts(db)
+            self.assertEqual(raw, 5)       # 3 original + 2 added
+            self.assertEqual(deduped, 3)   # still 3 distinct files
+            html = srv.page_wallets(db, limit=200)
+            self._assert_no_sql_error(html)
+            self.assertIn("deduplicated from 5 raw hits", html)
+            # provenance for file 1 lists all three discovery methods
+            self.assertIn("yara", html)
+            self.assertIn("pdf-extract", html)
+        finally:
+            os.unlink(db)
+
     def test_files_search_limit(self):
         html = srv.page_files(self.db, pattern="%", limit=2)
         self._assert_no_sql_error(html)

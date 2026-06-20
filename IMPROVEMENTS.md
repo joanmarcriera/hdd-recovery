@@ -86,7 +86,16 @@ No detection for VeraCrypt volumes, BitLocker-encrypted partitions, LUKS contain
 
 ---
 
-### 8. Wallet duplicate candidates across stages
+### 8. Wallet duplicate candidates across stages — DONE (2026-06-20)
+
+> Done as a non-destructive query-time merge rather than a schema change: the
+> `/wallets` page now groups `wallet_candidates` by file (NULL-file rows stay
+> individual), shows one row per file with a Methods column listing every
+> discovery stage that found it, and a header line exposing both the raw and
+> deduplicated counts. No rows are deleted — provenance is fully preserved.
+> Helper `wallet_dedup_counts()` in `bin/image-serve.py`; test in
+> `tests/unit/test_serve_queries.py`.
+
 
 The same `wallet.dat` found by TSK index, carving, and ext recovery creates 3 separate `wallet_candidates` rows with no deduplication. This inflates apparent candidate counts and complicates review.
 
