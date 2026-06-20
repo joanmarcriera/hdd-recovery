@@ -84,6 +84,9 @@
 - [x] #12 TUI blocked-stage explanation. (2026-06-20)
   - Disk-detail panel shows a "Blocked — requires first: …" banner; pure helper
     `unmet_prior_keys()` in `tui/stages.py`, tested in `test_pipeline.py`.
+- [x] #15 photo dedup clusters in the web UI. (2026-06-20)
+  - `/gallery` "Group duplicates" toggle (collapse to cluster primary + size
+    badge); `/pictures` carved table Cluster column. Tests in
+    `tests/unit/test_serve_queries.py`.
 - [ ] #13 dynamic device blocking in the wizard.
-- [ ] #15 photo dedup clusters in the web UI.
 - [ ] #16 replication reliability improvements.
