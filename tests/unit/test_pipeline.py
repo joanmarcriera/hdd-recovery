@@ -43,5 +43,28 @@ class TestQueueBuildCmd(unittest.TestCase):
         self.assertNotIn("--stage-timeout", cmd)
 
 
+class TestStageRegistry(unittest.TestCase):
+    """Guards the stage registry, incl. the wired-in OCR seed-scan stage (#6)."""
+
+    def test_keys_and_numbers_unique(self):
+        keys = [s.key for s in pl.STAGES]
+        nums = [s.number for s in pl.STAGES]
+        self.assertEqual(len(keys), len(set(keys)))
+        self.assertEqual(len(nums), len(set(nums)))
+
+    def test_ocr_seed_scan_registered_and_eligible(self):
+        s = pl.stage_index().get("ocr-seed-scan")
+        self.assertIsNotNone(s, "ocr-seed-scan stage not registered")
+        ok, reason = pl.is_eligible(s)
+        self.assertTrue(ok, f"ocr-seed-scan not eligible: {reason}")
+        self.assertEqual(s.script, "image-ocr-seed-scan.py")
+        self.assertEqual(s.args_template, ["{db}"])  # script has no --run flag
+        self.assertEqual(s.scan_run_key, "ocr-seed-scan")
+
+    def test_ocr_not_in_full_preset(self):
+        # Slow OCR must stay opt-in — not run automatically on every image.
+        self.assertNotIn("ocr-seed-scan", pl.PRESETS["full"])
+
+
 if __name__ == "__main__":
     unittest.main()

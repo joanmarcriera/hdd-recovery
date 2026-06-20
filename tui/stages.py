@@ -1034,6 +1034,34 @@ STAGES: list[StageDef] = [
         requires_prior=["carve-foremost", "carve-scalpel", "carve-recoverjpeg", "carve-magicrescue"],
     ),
     StageDef(
+        key="ocr-seed-scan",
+        number=49,
+        name="OCR Seed Phrase Scan",
+        description=(
+            "OCR recovered images with Tesseract and flag any whose text contains "
+            "a run of consecutive BIP39 seed words — catches seed phrases that were "
+            "photographed or scanned rather than typed.\n\n"
+            "Reads picture_candidates (joined with recovered_artifacts for file "
+            "paths), runs tesseract on each image, and writes hits to "
+            "<export_root>/hits/ocr-seeds/<timestamp>/ plus a scan_runs row; "
+            "high-confidence 12+ word runs are appended to notes.\n\n"
+            "Optional and intentionally NOT in the 'full' preset — OCR over every "
+            "recovered image is slow; run it explicitly or add it to a preset when "
+            "wanted.\n\n"
+            "Query hits afterwards:\n"
+            "  image-query.sh <db> findings ocr-seed-scan"
+        ),
+        script="image-ocr-seed-scan.py",
+        args_template=["{db}"],
+        scan_run_key="ocr-seed-scan",
+        pgrep_pattern="image-ocr-seed-scan",
+        runtime_hint="10 min – several hours",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["detect-pictures"],
+    ),
+    StageDef(
         key="enrich-trid",
         number=45,
         name="TrID File Type Enrichment",
