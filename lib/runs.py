@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 from datetime import datetime, timezone
 
 # cmdline fingerprints of our stage processes; used to reject PID reuse by an
@@ -19,6 +20,30 @@ STAGE_MARKERS = ("image-", "hdd-recovery")
 
 def _now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _darwin_cmdline(pid: int) -> str | None:
+    """Best-effort executable path lookup for marker checks on macOS."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        import ctypes
+        import ctypes.util
+    except ImportError:
+        return None
+    try:
+        lib = ctypes.CDLL(ctypes.util.find_library("proc") or "libproc.dylib")
+        buf = ctypes.create_string_buffer(4096)
+        n = lib.proc_pidpath(
+            ctypes.c_int(pid),
+            buf,
+            ctypes.c_uint32(len(buf)),
+        )
+    except OSError:
+        return None
+    if n <= 0:
+        return None
+    return buf.value.decode("utf-8", "replace")
 
 
 def pid_alive(pid, markers=STAGE_MARKERS) -> bool:
@@ -39,6 +64,11 @@ def pid_alive(pid, markers=STAGE_MARKERS) -> bool:
         return True            # exists, owned by another user
     except OSError:
         return False
+    if not os.path.isdir("/proc"):
+        cmd = _darwin_cmdline(pid)
+        if cmd:
+            return any(m in cmd for m in markers)
+        return True            # no process command source; assume alive
     try:
         with open(f"/proc/{pid}/cmdline", "rb") as fh:
             cmd = fh.read().replace(b"\x00", b" ").decode("utf-8", "replace")
