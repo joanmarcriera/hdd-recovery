@@ -113,6 +113,13 @@ class TestStageRegistry(unittest.TestCase):
         self.assertEqual(s.script, "image-detect-encrypted-containers.sh")
         self.assertEqual(s.scan_run_key, "detect-encrypted")
 
+    def test_unmet_prior_keys(self):
+        # Pure helper behind the TUI blocked-stage banner (#12).
+        from tui.stages import unmet_prior_keys
+        s = pl.stage_index().get("detect-encrypted")  # requires_prior=["init-db"]
+        self.assertEqual(unmet_prior_keys(s, set()), ["init-db"])
+        self.assertEqual(unmet_prior_keys(s, {"init-db"}), [])
+
     def test_detect_encrypted_in_full_and_wallet_presets(self):
         # Encrypted-container leads are cheap and high-value, so unlike OCR they
         # run as part of the standard sweeps.
