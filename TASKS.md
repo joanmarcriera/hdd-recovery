@@ -92,4 +92,8 @@
   - `tui/devices.py` derives blocked disks (mounted / ZFS member / destination)
     at runtime via `detect_blocked_devices()`; wizard falls back to `{sda,sdb,
     sdc}` only if detection is empty. Tests in `test_monitor_devices.py`.
-- [ ] #16 replication reliability improvements.
+- [x] #16 replication reliability improvements. (2026-06-20)
+  - Rewrote `replicate-parallel-to-truenas.sh`: top-level parallelism (fixes a
+    structure-flattening bug), per-item `--log-file`, `manifest.tsv`, exit-code
+    aggregation, optional `--checksum` verify, dry-run default, `xargs -P`
+    fallback. Smoke-tested end-to-end.

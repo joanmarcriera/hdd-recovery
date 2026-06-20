@@ -224,7 +224,17 @@ If Ollama is unreachable, the tagging job starts, opens a `scan_runs` record, th
 
 ---
 
-### 16. replicate-parallel-to-truenas.sh lacks reliability
+### 16. replicate-parallel-to-truenas.sh lacks reliability — DONE (2026-06-20)
+
+> Rewritten. Also fixed a latent bug: the old `find -maxdepth 4 | parallel rsync
+> {} $DST/` flattened nested files into the destination root. Now parallelizes
+> over top-level entries only (structure preserved), writes per-item
+> `--log-file`s and a `manifest.tsv` (item/status/rc/kbytes), aggregates exit
+> codes (non-zero if any item failed), adds an optional `--checksum` verification
+> pass, defaults to a dry-run preview (`--run` to copy), falls back to `xargs -P`
+> when GNU parallel is absent, and honours `TRUENAS_DEST_ROOT`. Smoke-tested
+> end-to-end (dry-run, real copy, checksum verify).
+
 
 The current script is a 46-line rsync wrapper with GNU parallel. It has no error aggregation, no per-file logging, no resume capability after partial failure, and no manifest verification.
 
