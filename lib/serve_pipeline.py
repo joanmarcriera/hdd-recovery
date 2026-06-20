@@ -26,6 +26,7 @@ from lib.supervised import (
     create_supervised_run,
     encode_env,
     finish_supervised_run,
+    request_supervised_stop,
     set_supervised_process,
 )
 
@@ -131,12 +132,25 @@ def panel_pipeline(db_path):
         log_q = urllib.parse.quote(log_path) if log_path else ""
         log_link = (f' &nbsp;<a href="/pipeline_log?db={enc}&log={log_q}">view log</a>'
                     if log_path else "")
+        stop_requested = pipeline_stop_requested(db_path)
+        stop_banner = (
+            '<p class="count">Stop-after-current-stage is already requested.</p>'
+            if stop_requested else ""
+        )
+        stop_disabled = "disabled" if stop_requested else ""
         active = (f'<p><span class="badge running">running</span> '
                   f'pid {pid}{log_link}</p>'
-                  f'<form method="post" action="/cancel_pipeline" '
-                  f'style="margin:6px 0 10px">'
+                  f'{stop_banner}'
+                  f'<form method="post" action="/stop_pipeline_after_stage" '
+                  f'style="margin:6px 0 4px">'
                   f'<input type="hidden" name="db" value="{h(db_path)}">'
-                  f'<button type="submit">Cancel pipeline</button>'
+                  f'<button type="submit" {stop_disabled}>'
+                  f'Stop after current stage</button>'
+                  f'</form>'
+                  f'<form method="post" action="/cancel_pipeline" '
+                  f'style="margin:0 0 10px">'
+                  f'<input type="hidden" name="db" value="{h(db_path)}">'
+                  f'<button type="submit">Cancel pipeline now</button>'
                   f'</form>')
 
     export_root = db_export_root(db_path)
@@ -351,6 +365,43 @@ def cancel_active_queue(root):
             if cancel_supervised_run(run.db_path, run.run_id):
                 count += 1
     return count
+
+
+def request_stop_active_queue(root):
+    seen = set()
+    count = 0
+    for db_path in find_databases(root):
+        for run in active_supervised_runs(db_path, run_kind="queue", reconcile=False):
+            key = (run.db_path, run.run_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            if request_supervised_stop(run.db_path, run.run_id):
+                count += 1
+    return count
+
+
+def queue_stop_requested(root):
+    for db_path in find_databases(root):
+        for run in active_supervised_runs(db_path, run_kind="queue", reconcile=False):
+            if run.cancel_requested:
+                return True
+    return False
+
+
+def request_stop_active_pipeline(db_path):
+    count = 0
+    for run in active_supervised_runs(db_path, run_kind="pipeline", reconcile=False):
+        if request_supervised_stop(db_path, run.run_id):
+            count += 1
+    return count
+
+
+def pipeline_stop_requested(db_path):
+    for run in active_supervised_runs(db_path, run_kind="pipeline", reconcile=False):
+        if run.cancel_requested:
+            return True
+    return False
 
 
 def page_pipeline_log(db_path, log_path, tail_kb=64):

@@ -63,7 +63,11 @@ from lib.serve_pipeline import (  # noqa: E402,F401
     page_pipeline_log,
     panel_pipeline,
     pipeline_active_for,
+    pipeline_stop_requested,
     queue_active,
+    queue_stop_requested,
+    request_stop_active_pipeline,
+    request_stop_active_queue,
     spawn_pipeline,
     spawn_queue,
 )

@@ -101,6 +101,20 @@ class TestSupervisedRuns(unittest.TestCase):
                 p.kill()
             p.wait()
 
+    def test_request_stop_marks_without_terminating_process_group(self):
+        db = self._db()
+        run_id = sup.create_supervised_run(db, "queue", "image-queue.py", "/tmp/q.log")
+        p = subprocess.Popen(["sleep", "30"], start_new_session=True)
+        sup.set_supervised_process(db, run_id, p.pid)
+        try:
+            self.assertTrue(sup.request_supervised_stop(db, run_id))
+            self.assertTrue(runs.pid_alive(p.pid, markers=("sleep",)))
+            self.assertTrue(sup.env_stop_requested(sup.encode_env([(db, run_id)])))
+        finally:
+            if p.poll() is None:
+                p.terminate()
+            p.wait()
+
 
 if __name__ == "__main__":
     unittest.main()

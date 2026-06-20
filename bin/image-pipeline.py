@@ -35,7 +35,11 @@ sys.path.insert(0, str(ROOT))
 from tui.stages import STAGES  # noqa: E402
 from lib.runs import reconcile_running  # noqa: E402
 from lib.progress import build_stage_progress_probe  # noqa: E402
-from lib.supervised import finish_env_runs, heartbeat_env_runs  # noqa: E402
+from lib.supervised import (  # noqa: E402
+    env_stop_requested,
+    finish_env_runs,
+    heartbeat_env_runs,
+)
 from lib.watchdog import (  # noqa: E402
     DEFAULT_PROGRESS_INTERVAL,
     DEFAULT_PROGRESS_TIMEOUT,
@@ -429,11 +433,16 @@ def main() -> int:
 
     results: list[tuple[str, str, float, int]] = []
     failed_any = False
+    stopped_by_request = False
     if args.run:
         heartbeat_env_runs(progress=True)
     for i, s in enumerate(plan, 1):
         if args.run:
             heartbeat_env_runs(progress=True)
+            if env_stop_requested():
+                stopped_by_request = True
+                log("Stop requested: not starting another stage", fh)
+                break
         log(f"[{i}/{len(plan)}] {s.key} — {s.name} ({s.runtime_hint})", fh)
         if args.skip_done and s.scan_run_key and stage_is_done(args.db, s.scan_run_key):
             log(f"  SKIP: already completed (status=ok in scan_runs)", fh)
@@ -477,6 +486,8 @@ def main() -> int:
                 break
 
     log("", fh)
+    if stopped_by_request:
+        log("Stopped after current stage by request.", fh)
     log("Summary:", fh)
     for key, status, dt, rc in results:
         log(f"  {key:30s} {status:10s} {dt:7.1f}s  rc={rc}", fh)
@@ -486,8 +497,9 @@ def main() -> int:
     exit_code = 1 if (args.run and failed_any) else 0
     if args.run:
         finish_env_runs(
-            "failed" if failed_any else "ok",
+            "failed" if failed_any else ("stopped" if stopped_by_request else "ok"),
             exit_code=exit_code,
+            notes="stop requested" if stopped_by_request else "",
         )
     return exit_code
 
