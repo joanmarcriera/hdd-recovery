@@ -32,7 +32,8 @@ EOF
 
 image="${1:-}"
 truenas_host="${2:-}"
-remote_root="${3:-/mnt/BigDisk/CryptoBackup}"
+# 3rd arg wins; else TRUENAS_DEST_ROOT from the environment; else the default.
+remote_root="${3:-${TRUENAS_DEST_ROOT:-/mnt/BigDisk/CryptoBackup}}"
 
 [[ -n "$image" && -n "$truenas_host" ]] || { usage; exit 1; }
 [[ -f "$image" ]] || die "image file not found: $image"

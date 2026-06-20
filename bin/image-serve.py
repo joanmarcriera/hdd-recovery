@@ -2372,7 +2372,9 @@ def page_mapview(map_path, db_path=""):
 # ── request handler ───────────────────────────────────────────────────────────
 
 class Handler(http.server.BaseHTTPRequestHandler):
-    root = "/mnt/recovery16tb/recovery"
+    # Fallback only; main() overrides this from --root / DB_ROOT. RECOVERY_ROOT
+    # lets the legacy default be set without code changes.
+    root = os.environ.get("RECOVERY_ROOT", "/mnt/recovery16tb/recovery")
 
     def log_message(self, fmt, *args):
         pass  # suppress default access log; errors still shown

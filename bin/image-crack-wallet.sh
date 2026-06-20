@@ -45,7 +45,9 @@ find_bitcoin2john() {
 }
 
 db="${1:-}"
-wordlist="$ROOT_DIR/config/wordlists/rockyou.txt"
+# WORDLIST_PATH (from config/analysis-pipeline.env, sourced via common.sh) wins
+# when set; otherwise fall back to the bundled rockyou.txt. --wordlist overrides both.
+wordlist="${WORDLIST_PATH:-$ROOT_DIR/config/wordlists/rockyou.txt}"
 rules_path=""
 cpu_fallback=0
 task_id=""
