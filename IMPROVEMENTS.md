@@ -256,7 +256,19 @@ The `findings` table is auto-created inline in `bin/image-tag-photos.py` with `C
 
 ## Priority 4 — Low (Polish & Future-Proofing)
 
-### 18. image-serve.py refactor (2007 lines, monolithic)
+### 18. image-serve.py refactor (monolithic) — IN PROGRESS (2026-06-20)
+
+> First safe extraction landed: `lib/serve_auth.py` (optional Basic-auth helpers)
+> and `lib/serve_mapfile.py` (ddrescue mapfile parse + SVG) are now standalone,
+> imported back behind unchanged call sites. image-serve.py dropped from ~2,930
+> to ~2,860 lines, and the previously-untested mapfile parser gained
+> `tests/unit/test_serve_mapfile.py`. **Remaining:** extract the page_* renderers,
+> the db/util helpers (`run_query`/`table_html`/`h`/`badge`/…), and the request
+> Handler into cohesive modules behind a thin entrypoint. That larger split
+> should be validated against a running server (the unit suite only covers the
+> page query functions), so it's deferred to an environment where the UI can be
+> exercised end-to-end.
+
 
 All HTML generation, SQL logic, routing, and file serving are in a single 2007-line file. Adding new routes or modifying existing ones requires navigating the entire file.
 
