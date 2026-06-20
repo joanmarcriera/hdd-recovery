@@ -344,10 +344,17 @@ Investigation of slow `:7788` (web review UI, `image-serve.py`) and `:7682`
 
 ### Recommended next (safe, self-contained — pick any)
 
-- **#6** Wire the orphaned `image-ocr-seed-scan.py` into `tui/stages.py` so it's
-  runnable (register only; leave out of the `full` preset to avoid auto-OCR).
-- **#11** Move hardcoded path defaults (recovery root, `rockyou.txt`,
-  TrueNAS dest) into `config/analysis-pipeline.env`.
-- **#21** Move the YARA score map to `config/yara/scoring.conf`.
+- **#6 — DONE (2026-06-20).** Wired the orphaned `image-ocr-seed-scan.py` into
+  `tui/stages.py` as stage `ocr-seed-scan` (eligible, tracked, registry tests in
+  `tests/unit/test_pipeline.py`). Left out of the `full` preset to avoid auto-OCR.
+- **#11 — DONE (2026-06-20).** Hardcoded path defaults now read from
+  `config/analysis-pipeline.env`: `WORDLIST_PATH` (image-crack-wallet.sh),
+  `TRUENAS_DEST_ROOT` (send-image-to-truenas.sh), `RECOVERY_ROOT`
+  (image-serve.py fallback). All keep their built-in default when unset; CLI
+  args still win.
+- **#21 — DONE (2026-06-20).** YARA rule→score map externalized to
+  `config/yara/scoring.conf` (with a `default` catch-all). image-yara-scan.sh
+  falls back to the built-in map if the file is absent/unparseable; pinned by
+  `tests/unit/test_yara_scoring.py`.
 - **P2 (security)** Optional basic-auth on the LAN-facing review UI (reuse
   `TTYD_PASSWORD`) — currently `/sql`, `/file`, `/gallery` are unauthenticated.
