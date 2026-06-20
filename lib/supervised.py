@@ -60,6 +60,7 @@ class SupervisedRun:
     started_at: str
     heartbeat_at: str
     last_progress_at: str
+    cancel_requested: bool
 
 
 def ensure_supervised_schema(db_path: str) -> None:
@@ -219,6 +220,32 @@ def cancel_supervised_run(db_path: str, run_id: int) -> bool:
         return False
 
 
+def request_supervised_stop(
+    db_path: str,
+    run_id: int,
+    *,
+    reason: str = "stop after current stage",
+) -> bool:
+    """Request a graceful stop without terminating the running process group."""
+    ensure_supervised_schema(db_path)
+    now = _now()
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.execute(
+            """
+            UPDATE supervised_runs
+            SET cancel_requested=1, heartbeat_at=?,
+                notes=TRIM(COALESCE(notes,'') || ?)
+            WHERE id=? AND status IN ('starting','running')
+            """,
+            (now, f" [{reason} requested at {now}]", run_id),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
 def _row_to_run(db_path: str, row) -> SupervisedRun:
     return SupervisedRun(
         db_path=db_path,
@@ -231,6 +258,7 @@ def _row_to_run(db_path: str, row) -> SupervisedRun:
         started_at=row["started_at"] or "",
         heartbeat_at=row["heartbeat_at"] or "",
         last_progress_at=row["last_progress_at"] or "",
+        cancel_requested=bool(row["cancel_requested"]),
     )
 
 
@@ -318,11 +346,30 @@ def decode_env(value: str | None = None) -> list[tuple[str, int]]:
     return out
 
 
+def env_stop_requested(value: str | None = None) -> bool:
+    """Return True if any supervised run from SUPERVISED_RUNS requested stop."""
+    for db_path, run_id in decode_env(value):
+        ensure_supervised_schema(db_path)
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute(
+                "SELECT cancel_requested FROM supervised_runs WHERE id=?",
+                (run_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row and int(row[0] or 0):
+            return True
+    return False
+
+
 def heartbeat_env_runs(*, progress: bool = False) -> None:
     for db_path, run_id in decode_env():
         update_supervised_heartbeat(db_path, run_id, progress=progress)
 
 
 def finish_env_runs(status: str, *, exit_code: int | None = None, notes: str = "") -> None:
+    if os.environ.get("SUPERVISED_FINISH_DISABLED") == "1":
+        return
     for db_path, run_id in decode_env():
         finish_supervised_run(db_path, run_id, status, exit_code=exit_code, notes=notes)

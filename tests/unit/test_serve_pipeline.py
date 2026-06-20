@@ -37,6 +37,52 @@ class TestServePipeline(unittest.TestCase):
             self.assertEqual(qdir, os.path.join(root, "queue-logs"))
             self.assertTrue(os.path.isdir(qdir))
 
+    def test_request_stop_active_queue_marks_active_rows_without_cancel(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = os.path.join(root, "x.img.analysis.sqlite")
+            conn = sqlite3.connect(db)
+            conn.execute("CREATE TABLE image_info(id INTEGER PRIMARY KEY, export_root TEXT)")
+            conn.execute("INSERT INTO image_info(id, export_root) VALUES (1, ?)", (root,))
+            conn.commit()
+            conn.close()
+            run_id = pipe.create_supervised_run(db, "queue", "image-queue.py", "/tmp/q.log")
+
+            self.assertEqual(pipe.request_stop_active_queue(root), 1)
+            self.assertTrue(pipe.queue_stop_requested(root))
+
+            conn = sqlite3.connect(db)
+            try:
+                row = conn.execute(
+                    "SELECT status,cancel_requested FROM supervised_runs WHERE id=?",
+                    (run_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            self.assertEqual(row, ("starting", 1))
+
+    def test_request_stop_active_pipeline_marks_active_rows_without_cancel(self):
+        with tempfile.TemporaryDirectory() as root:
+            db = os.path.join(root, "x.img.analysis.sqlite")
+            conn = sqlite3.connect(db)
+            conn.execute("CREATE TABLE image_info(id INTEGER PRIMARY KEY, export_root TEXT)")
+            conn.execute("INSERT INTO image_info(id, export_root) VALUES (1, ?)", (root,))
+            conn.commit()
+            conn.close()
+            run_id = pipe.create_supervised_run(db, "pipeline", "image-pipeline.py", "/tmp/p.log")
+
+            self.assertEqual(pipe.request_stop_active_pipeline(db), 1)
+            self.assertTrue(pipe.pipeline_stop_requested(db))
+
+            conn = sqlite3.connect(db)
+            try:
+                row = conn.execute(
+                    "SELECT status,cancel_requested FROM supervised_runs WHERE id=?",
+                    (run_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+            self.assertEqual(row, ("starting", 1))
+
     def test_db_log_path_accepts_only_export_logs(self):
         with tempfile.TemporaryDirectory() as export_root:
             logs = os.path.join(export_root, "logs")

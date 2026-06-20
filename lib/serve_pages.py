@@ -24,6 +24,7 @@ from lib.serve_pipeline import (
     panel_pipeline,
     pipeline_active_for,
     queue_active,
+    queue_stop_requested,
 )
 from lib.serve_queue_log import (
     collapse_queue_noise as _collapse_queue_noise,
@@ -222,12 +223,22 @@ def page_queue(root):
 
     active = ""
     if qpid:
+        stop_requested = queue_stop_requested(root)
+        stop_banner = (
+            '<p class="count">Stop-after-current-stage is already requested.</p>'
+            if stop_requested else ""
+        )
+        stop_disabled = "disabled" if stop_requested else ""
         active = (f'<div class="panel" style="border-left:4px solid #22aa44">'
                   f'<span class="badge running">running</span> a queue is active '
                   f'(pid {qpid}). <a href="/queue_log">view queue log</a>'
+                  f'{stop_banner}'
+                  f'<form method="post" action="/stop_queue_after_stage" '
+                  f'style="margin-top:8px"><button type="submit" {stop_disabled}>'
+                  f'Stop after current stage</button></form>'
                   f'<form method="post" action="/cancel_queue" '
                   f'style="margin-top:8px"><button type="submit">'
-                  f'Cancel queue</button></form></div>')
+                  f'Cancel queue now</button></form></div>')
 
     # image checkboxes (default all checked)
     img_rows = ""

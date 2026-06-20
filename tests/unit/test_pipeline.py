@@ -5,6 +5,7 @@ import sqlite3
 import sys
 import tempfile
 import time
+import types
 import unittest
 
 from _loader import REPO_ROOT, load_module
@@ -12,6 +13,7 @@ from _loader import REPO_ROOT, load_module
 pl = load_module("bin/image-pipeline.py")
 q = load_module("bin/image-queue.py")
 prog = load_module("lib/progress.py")
+sup = load_module("lib/supervised.py")
 SCHEMA = REPO_ROOT / "sql" / "analysis-schema.sql"
 
 
@@ -81,6 +83,22 @@ class TestQueueBuildCmd(unittest.TestCase):
         self.assertIn("600", cmd)
         self.assertIn("--stage-progress-interval", cmd)
         self.assertIn("5", cmd)
+
+    def test_run_one_disables_child_finish_of_queue_supervision(self):
+        seen = {}
+        orig_run = q.subprocess.run
+        try:
+            def fake_run(cmd, env=None):
+                seen["disabled"] = env.get("SUPERVISED_FINISH_DISABLED")
+                return types.SimpleNamespace(returncode=0)
+
+            q.subprocess.run = fake_run
+            rc = q.run_one("/x.sqlite", ["a"], False, False)
+        finally:
+            q.subprocess.run = orig_run
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(seen["disabled"], "1")
 
 
 class TestStageRegistry(unittest.TestCase):
@@ -178,6 +196,73 @@ class TestQueuePrereqPassthrough(unittest.TestCase):
     def test_can_disable(self):
         cmd = q.build_cmd("/x.sqlite", ["a"], False, False, require_prereqs=False)
         self.assertNotIn("--require-prereqs", cmd)
+
+
+class TestPipelineGracefulStop(unittest.TestCase):
+    def _db(self):
+        td = tempfile.TemporaryDirectory()
+        self.addCleanup(td.cleanup)
+        db = os.path.join(td.name, "x.img.analysis.sqlite")
+        conn = sqlite3.connect(db)
+        conn.executescript(SCHEMA.read_text())
+        now = "2026-06-20T00:00:00Z"
+        conn.execute(
+            "INSERT INTO image_info(id,image_path,image_name,image_basename,"
+            "export_root,created_at,updated_at) VALUES (1,?,?,?,?,?,?)",
+            (os.path.join(td.name, "x.img"), "x.img", "x", td.name, now, now),
+        )
+        conn.commit()
+        conn.close()
+        return db
+
+    def test_stop_request_breaks_before_next_stage_and_marks_stopped(self):
+        db = self._db()
+        run_id = sup.create_supervised_run(db, "pipeline", "image-pipeline.py", "/tmp/p.log")
+        old_env = os.environ.get("SUPERVISED_RUNS")
+        old_argv = sys.argv[:]
+        orig_run_stage = pl.run_stage
+        orig_stop = pl.env_stop_requested
+        ran = []
+        checks = iter([False, True])
+        try:
+            os.environ["SUPERVISED_RUNS"] = sup.encode_env([(db, run_id)])
+            sys.argv = [
+                "image-pipeline.py",
+                db,
+                "--run",
+                "structure-scan",
+                "detect-wallets",
+            ]
+
+            def fake_run_stage(stage, *args, **kwargs):
+                ran.append(stage.key)
+                return 0, 0.1
+
+            pl.run_stage = fake_run_stage
+            pl.env_stop_requested = lambda: next(checks, True)
+            rc = pl.main()
+        finally:
+            pl.run_stage = orig_run_stage
+            pl.env_stop_requested = orig_stop
+            sys.argv = old_argv
+            if old_env is None:
+                os.environ.pop("SUPERVISED_RUNS", None)
+            else:
+                os.environ["SUPERVISED_RUNS"] = old_env
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(ran, ["structure-scan"])
+        self.assertEqual(self._supervised_status(db, run_id), "stopped")
+
+    def _supervised_status(self, db, run_id):
+        conn = sqlite3.connect(db)
+        try:
+            return conn.execute(
+                "SELECT status FROM supervised_runs WHERE id=?",
+                (run_id,),
+            ).fetchone()[0]
+        finally:
+            conn.close()
 
 
 if __name__ == "__main__":

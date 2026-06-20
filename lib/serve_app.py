@@ -56,6 +56,8 @@ from lib.serve_pipeline import (  # noqa: E402
     page_pipeline_log,
     pipeline_active_for,
     queue_active,
+    request_stop_active_pipeline,
+    request_stop_active_queue,
     spawn_pipeline,
     spawn_queue,
 )
@@ -394,6 +396,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 f'/db?db={urllib.parse.quote(db)}' if db else "/",
             )
             self.end_headers()
+        elif p == "/stop_pipeline_after_stage":
+            if db and os.path.isfile(db):
+                request_stop_active_pipeline(db)
+            self.send_response(302)
+            self.send_header(
+                "Location",
+                f'/db?db={urllib.parse.quote(db)}' if db else "/",
+            )
+            self.end_headers()
         elif p == "/queue":
             sel_dbs = params.get("db", [])
             presets = params.get("preset", [])
@@ -427,6 +438,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
         elif p == "/cancel_queue":
             cancel_active_queue(self.root)
+            self.send_response(302)
+            self.send_header("Location", "/queue_log")
+            self.end_headers()
+        elif p == "/stop_queue_after_stage":
+            request_stop_active_queue(self.root)
             self.send_response(302)
             self.send_header("Location", "/queue_log")
             self.end_headers()

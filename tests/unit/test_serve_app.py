@@ -1,5 +1,6 @@
 """Dispatch smoke tests for lib/serve_app.py (#18 Handler extraction)."""
 import os
+import io
 import sqlite3
 import tempfile
 import unittest
@@ -49,10 +50,22 @@ class CaptureHandler(app.Handler):
         self.captured = ("response", status)
 
     def send_header(self, key, value):
-        pass
+        if self.captured and self.captured[0] == "response":
+            headers = self.captured[2] if len(self.captured) > 2 else {}
+            headers[key] = value
+            self.captured = ("response", self.captured[1], headers)
 
     def end_headers(self):
         pass
+
+
+class CapturePostHandler(CaptureHandler):
+    def __init__(self, path, root, body=""):
+        super().__init__(path, root)
+        self.command = "POST"
+        self.body = body.encode("utf-8")
+        self.rfile = io.BytesIO(self.body)
+        self.headers = {"Content-Length": str(len(self.body))}
 
 
 class TestServeAppDispatch(unittest.TestCase):
@@ -82,6 +95,18 @@ class TestServeAppDispatch(unittest.TestCase):
         kind, status, mime, data = self.dispatch("/api/queue")
         self.assertEqual((kind, status, mime), ("bytes", 200, "application/json"))
         self.assertIn(b'"running": false', data)
+
+    def test_stop_queue_after_stage_redirects_to_queue_log(self):
+        h = CapturePostHandler("/stop_queue_after_stage", self.tmp.name)
+        h.do_POST()
+        self.assertEqual(h.captured[0:2], ("response", 302))
+        self.assertEqual(h.captured[2]["Location"], "/queue_log")
+
+    def test_stop_pipeline_after_stage_redirects_home_without_db(self):
+        h = CapturePostHandler("/stop_pipeline_after_stage", self.tmp.name)
+        h.do_POST()
+        self.assertEqual(h.captured[0:2], ("response", 302))
+        self.assertEqual(h.captured[2]["Location"], "/")
 
 
 if __name__ == "__main__":
