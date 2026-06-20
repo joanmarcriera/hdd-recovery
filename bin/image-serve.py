@@ -8,7 +8,7 @@ a given root directory.  All SQL executed is restricted to SELECT/WITH.
 Usage:
   image-serve.py [--root DIR] [--port PORT] [--host HOST]
 """
-import argparse, glob, gzip, hashlib, html, http.server, importlib.util, io, json, mimetypes, os, re
+import argparse, base64, binascii, glob, gzip, hashlib, hmac, html, http.server, importlib.util, io, json, mimetypes, os, re
 import shlex, sqlite3, subprocess, sys, tempfile, threading, time, urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
@@ -142,10 +142,61 @@ def badge(status):
 
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
 
+_WEB_AUTH_REALM = "hdd-recovery"
+_WEB_AUTH_EXEMPT_PATHS = {"/health", "/status"}
+
 # Hard cap for the gallery "View all" mode: emitting every <img> for a DB with
 # tens of thousands of carved images builds an enormous DOM and that many /thumb
 # requests. Show the first N and tell the user to paginate/filter for the rest.
 GALLERY_ALL_CAP = 1000
+
+
+def _webui_auth_config(environ=None):
+    """Return (username, password) for optional web auth, or None when disabled."""
+    environ = os.environ if environ is None else environ
+    password = environ.get("WEBUI_PASSWORD") or environ.get("TTYD_PASSWORD") or ""
+    if not password:
+        return None
+    username = environ.get("WEBUI_USER") or environ.get("TTYD_USER") or "admin"
+    return username, password
+
+
+def _basic_auth_credentials(header):
+    """Parse an HTTP Basic Authorization header into (username, password)."""
+    if not header:
+        return None
+    scheme, sep, token = header.partition(" ")
+    if not sep or scheme.lower() != "basic" or not token.strip():
+        return None
+    try:
+        decoded = base64.b64decode(token.strip(), validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError):
+        return None
+    username, sep, password = decoded.partition(":")
+    if not sep:
+        return None
+    return username, password
+
+
+def _auth_path_exempt(path):
+    return urllib.parse.urlparse(path).path in _WEB_AUTH_EXEMPT_PATHS
+
+
+def _constant_time_equal(left, right):
+    return hmac.compare_digest(left.encode("utf-8"), right.encode("utf-8"))
+
+
+def _webui_auth_ok(path, auth_header, environ=None):
+    config = _webui_auth_config(environ)
+    if config is None or _auth_path_exempt(path):
+        return True
+    credentials = _basic_auth_credentials(auth_header)
+    if credentials is None:
+        return False
+    expected_user, expected_password = config
+    username, password = credentials
+    return (_constant_time_equal(username, expected_user)
+            and _constant_time_equal(password, expected_password))
 
 
 def page(title, body, db_name="", nav_extra="", head_extra=""):
@@ -2399,6 +2450,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # client closed the connection mid-response (refresh / navigate away)
             self.close_connection = True
 
+    def check_auth(self):
+        if _webui_auth_ok(self.path, self.headers.get("Authorization")):
+            return True
+        body = b"Authentication required\n"
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", f'Basic realm="{_WEB_AUTH_REALM}", charset="UTF-8"')
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+        return False
+
     def send_bytes_cached(self, data, mime, etag, max_age=86400, extra_headers=None):
         """Send an in-memory blob with ETag/Cache-Control, honouring If-None-Match (304)."""
         if etag and self.headers.get("If-None-Match") == etag:
@@ -2461,6 +2526,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return urllib.parse.urlparse(self.path).path
 
     def do_GET(self):
+        if not self.check_auth():
+            return
         p = self.path_only()
         db = self.qsval("db")
 
@@ -2612,6 +2679,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_html(page("Error", f'<p class="err">{h(str(e))}</p>'), 500)
 
     def do_POST(self):
+        if not self.check_auth():
+            return
         p = self.path_only()
         length = int(self.headers.get("Content-Length", 0))
         body_raw = self.rfile.read(length).decode("utf-8", errors="replace")
@@ -2717,6 +2786,24 @@ def main():
     args = ap.parse_args()
 
     Handler.root = args.root
+
+    # Startup reconciliation: correct scan_runs rows left 'running' by a previous
+    # kill/crash/restart so the UI doesn't show phantom-active stages. Best-effort.
+    try:
+        _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if _repo not in sys.path:
+            sys.path.insert(0, _repo)
+        from lib.runs import reconcile_running
+        total = 0
+        for db in find_databases(args.root):
+            try:
+                total += reconcile_running(db)
+            except Exception:
+                pass
+        if total:
+            print(f"Reconciled {total} stale 'running' run(s) at startup.")
+    except Exception as e:
+        print(f"(startup reconcile skipped: {e})")
 
     server = http.server.ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"hdd-recovery web UI  →  http://{args.host}:{args.port}/")
