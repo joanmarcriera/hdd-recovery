@@ -292,3 +292,62 @@ Investigation of slow `:7788` (web review UI, `image-serve.py`) and `:7682`
 - **`ThreadingHTTPServer` has no connection cap.** Under many concurrent image
   requests it can spawn unbounded threads; a small worker pool / semaphore would
   bound memory.
+
+---
+
+## Status — 2026-06-20 (reliability + CI + polish pass)
+
+### Done this pass
+
+- **Queue-log viewer rewrite** (`bin/image-serve.py`). Progress header (image
+  X of N, current image, bar) parsed from `START`/`DONE` markers; collapses the
+  per-second bulk_extractor `Offset … Done in 0:00:00` spam; in-place JS poll
+  (preserves scroll, Pause button) replacing the whole-page meta-refresh; raw=1
+  JSON poll endpoint.
+- **Per-stage timeout backstop** (`bin/image-pipeline.py`, `bin/image-queue.py`).
+  Stages ran via `subprocess.call()` with no time limit, so the bulk_extractor
+  `--scope recovered` finalization spin blocked the whole image and the entire
+  queue indefinitely. Now: Popen in its own session, `wait(timeout)`, and on
+  timeout SIGTERM→SIGKILL the whole process group (no orphans); returns rc=124,
+  summary status `timeout`. `--stage-timeout` / `STAGE_TIMEOUT` env (default 12h,
+  `0` disables), propagated through the queue. *Addresses the gap behind the
+  current stuck queue.*
+- **CI** (`.github/workflows/ci.yml`): `bash -n`, ShellCheck (errors only),
+  `python -m py_compile`, and the offline unit suite, on push to main + PRs.
+- **Offline unit test suite** (`tests/unit/`, stdlib `unittest`, no deps or
+  fixtures): queue-log parser/collapse, `safe_sql`, path-traversal guard,
+  `_human_size`, pipeline timeout/process-group kill, queue `build_cmd`, and a
+  schema-built-DB regression test proving the parameterized SQL honors `LIMIT`.
+  Runner: `tests/run-unit.sh`. *Groundwork for the #18 refactor.*
+- **Pinned Python deps** (`docker/requirements.txt`): bsddb3, ecdsa,
+  pycryptodome, volatility3, imagehash — the formerly-unpinned pip installs.
+  Dockerfile installs from it.
+- **Parameterized SQL** — the f-string `LIMIT`/`OFFSET` in the wallet / picture /
+  file / gallery queries now use bound params (`#9`).
+- **`/api/queue`** — machine-readable queue progress JSON for monitoring.
+- **Build context trimmed** — `.dockerignore` excludes dev/agent dirs and notes.
+- **Release path** — `main` is canonical; push-to-main auto-builds via the
+  existing `docker-publish.yml` Action.
+
+### Now obsolete / already resolved (backlog corrections)
+
+- **#2 (set -Eeuo pipefail)** — all 68 shell scripts already set it; the
+  remaining work is just explicit exit-code checks before `record_scan_end ok`.
+- **#17 (findings/wallet_keys/crack_tasks not in schema)** — these tables are now
+  in `sql/analysis-schema.sql`; only a harmless defensive `CREATE TABLE IF NOT
+  EXISTS` remains inline in `image-tag-photos.py`.
+- **#18 line count** — `image-serve.py` is now ~2,720 lines (was 2,007). Refactor
+  still pending (deferred).
+- **#20 (smoke-test portability)** — partially addressed: a fixture-free
+  `tests/unit/` suite now runs in CI and locally. The fixture-based
+  `tests/smoke/` still need synthetic fixtures + `FIXTURE_DIR`.
+
+### Recommended next (safe, self-contained — pick any)
+
+- **#6** Wire the orphaned `image-ocr-seed-scan.py` into `tui/stages.py` so it's
+  runnable (register only; leave out of the `full` preset to avoid auto-OCR).
+- **#11** Move hardcoded path defaults (recovery root, `rockyou.txt`,
+  TrueNAS dest) into `config/analysis-pipeline.env`.
+- **#21** Move the YARA score map to `config/yara/scoring.conf`.
+- **P2 (security)** Optional basic-auth on the LAN-facing review UI (reuse
+  `TTYD_PASSWORD`) — currently `/sql`, `/file`, `/gallery` are unauthenticated.
