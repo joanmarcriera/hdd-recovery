@@ -62,17 +62,18 @@
     already lists cr2/nef/arw/dng/raf/orf, so no work was needed. See
     `IMPROVEMENTS.md` #10.
 
+- [x] #8 wallet candidate deduplication. (2026-06-20)
+  - Non-destructive query-time merge: `/wallets` groups candidates by file,
+    shows a Methods column with every discovery stage, and exposes raw vs
+    deduped counts. No evidence deleted. Helper `wallet_dedup_counts()` in
+    `bin/image-serve.py`; test in `tests/unit/test_serve_queries.py`.
+
 ## Next
 
 - [ ] #18 split `bin/image-serve.py`.
   - Completion criteria: extract cohesive route/page/db/util modules behind a
     thin entrypoint; keep the public routes unchanged; add or preserve focused
     unit coverage after each extraction; keep `./tests/run-unit.sh` green.
-
-- [ ] #8 wallet candidate deduplication.
-  - Completion criteria: merge duplicate wallet candidates across discovery
-    methods without deleting evidence; expose deduped counts in the review UI;
-    preserve provenance for every source method.
 
 ## Backlog
 
