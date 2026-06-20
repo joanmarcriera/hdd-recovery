@@ -356,5 +356,48 @@ Investigation of slow `:7788` (web review UI, `image-serve.py`) and `:7682`
   `config/yara/scoring.conf` (with a `default` catch-all). image-yara-scan.sh
   falls back to the built-in map if the file is absent/unparseable; pinned by
   `tests/unit/test_yara_scoring.py`.
-- **P2 (security)** Optional basic-auth on the LAN-facing review UI (reuse
-  `TTYD_PASSWORD`) — currently `/sql`, `/file`, `/gallery` are unauthenticated.
+- **P2 — DONE (2026-06-20).** Optional HTTP Basic auth now protects the
+  LAN-facing review UI when `TTYD_PASSWORD` or `WEBUI_PASSWORD` is set.
+  `/health` and `/status` remain unauthenticated for health probes.
+
+---
+
+## Codex review — unattended-run robustness (2026-06-20)
+
+External review focused on long-running unattended stages. Theme: a shared,
+durable, **progress-aware** run supervisor. Eight findings (F1–F8).
+
+### Done
+
+- **F6 — Prerequisite enforcement.** `image-pipeline.py` gained
+  `--require-prereqs`: a stage whose `requires_prior` stages aren't `status=ok`
+  is skipped instead of burning hours on missing inputs. `image-queue.py` enables
+  it by default for unattended runs (`--no-require-prereqs` to opt out). Tests in
+  `tests/unit/test_pipeline.py`.
+- **F2 — Durable PID + stale-run reconciliation.** `scan_runs` now records
+  `pid/pgid/host/heartbeat_at/last_progress_at/cancel_requested` (schema +
+  `common.sh` migration; `record_scan_start` populates them). New `lib/runs.py`
+  `reconcile_running()` marks rows left `running` by a kill/crash/restart as
+  `interrupted` once their pid is provably gone (rows without a pid are left for
+  human review). Called at pipeline start and web-UI startup; standalone
+  `bin/image-reconcile-runs.py`. Tests in `tests/unit/test_runs.py`.
+- **F8 — Derived monitored device.** `tui/monitor.py` no longer hardcodes `sdc`;
+  `tui/devices.py` derives the destination disk from `$MONITOR_DEST_DEV` / the
+  mount backing the image-export root (ZFS-aware), falling back to `sdc`. Tests
+  in `tests/unit/test_monitor_devices.py`.
+
+### Pending (bigger, build on F2's durable columns)
+
+- **F1 — Shared watchdog runner.** Route the TUI launch path
+  (`tui/executor.py`) and web launches through one runner with wall + idle
+  timeout and process-group kill (CLI pipeline already has the wall-timeout half).
+- **F3 — Useful-progress probes + idle timeout.** Per-stage probes (ddrescue
+  rescued bytes, log mtime, output-dir size, artifact count, queue-marker age, DB
+  row count); kill/pause after "no useful progress for N min" (`last_progress_at`
+  column is ready).
+- **F4 — Durable job table for queue/detached runs.** Replace pgrep-only queue
+  detection with a supervised-runs record (PID/PGID, log, heartbeat, cancel).
+- **F5 — Maintain `crack_tasks` progress.** Parse `hashcat --status` into
+  `progress_pct`/`eta_seconds`; enforce max runtime; preserve checkpoint/restore.
+- **F7 — Stuckness in the monitor.** Compare current vs prior activity; show
+  active / idle Nm / no output Nh / probably stuck, with the source of the call.
