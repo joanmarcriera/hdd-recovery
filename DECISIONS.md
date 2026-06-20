@@ -1,5 +1,45 @@
 # Decisions
 
+## 2026-06-20 — Web UI Split Keeps a Compatibility Entrypoint
+
+**Decision:** #18 splits the former `bin/image-serve.py` monolith into domain
+modules while keeping `bin/image-serve.py` as a thin compatibility entrypoint
+that re-exports legacy helper names used by tests and older imports. Route
+dispatch and CLI startup live in `lib/serve_app.py`; page rendering in
+`lib/serve_pages.py`; file export/gallery logic in `lib/serve_gallery.py`;
+pipeline/queue process helpers in `lib/serve_pipeline.py`; generic HTML
+formatting in `lib/serve_ui.py`; queue-log parsing in `lib/serve_queue_log.py`;
+and the earlier auth, DB, and ddrescue-map units remain in their own modules.
+
+**Alternatives considered:**
+
+- Move everything into one `lib/serve_app.py` module.
+- Replace page functions with templates in the same change.
+- Rename public helper functions immediately and update all tests/imports.
+
+**Rationale:** A domain split reduces the monolith without changing routes or
+forcing a template migration into the same patch. Keeping re-exports in the
+entrypoint preserves the current unit-test surface and avoids breaking any
+operator scripts that may import helper names from `bin/image-serve.py`.
+Dispatch coverage is provided by a socket-free `Handler` test double, because
+the local sandbox can deny loopback binds.
+
+**Consequences:**
+
+- `bin/image-serve.py` stays intentionally import-heavy so older helper imports
+  continue to work.
+- Future UI work should edit the relevant `lib/serve_*.py` module rather than
+  adding logic back to the entrypoint.
+- Route changes can now be tested at either page-function level or via
+  `tests/unit/test_serve_app.py` dispatch tests without source media.
+
+**Revisit if:**
+
+- The UI adopts templates, at which point `lib/serve_pages.py` can shrink into
+  query/view-model helpers.
+- External imports of `bin/image-serve.py` helper names can be formally
+  deprecated and the compatibility re-export list removed.
+
 ## 2026-06-20 — Encrypted-Container Detection Uses a Pure Classifier, Not YARA
 
 **Decision:** The `detect-encrypted` stage (#7) puts its detection logic in a

@@ -256,18 +256,17 @@ The `findings` table is auto-created inline in `bin/image-tag-photos.py` with `C
 
 ## Priority 4 — Low (Polish & Future-Proofing)
 
-### 18. image-serve.py refactor (monolithic) — IN PROGRESS (2026-06-20)
+### 18. image-serve.py refactor (monolithic) — DONE (2026-06-20)
 
-> First safe extraction landed: `lib/serve_auth.py` (optional Basic-auth helpers)
-> and `lib/serve_mapfile.py` (ddrescue mapfile parse + SVG) are now standalone,
-> imported back behind unchanged call sites. image-serve.py dropped from ~2,930
-> to ~2,860 lines, and the previously-untested mapfile parser gained
-> `tests/unit/test_serve_mapfile.py`. **Remaining:** extract the page_* renderers,
-> the db/util helpers (`run_query`/`table_html`/`h`/`badge`/…), and the request
-> Handler into cohesive modules behind a thin entrypoint. That larger split
-> should be validated against a running server (the unit suite only covers the
-> page query functions), so it's deferred to an environment where the UI can be
-> exercised end-to-end.
+> Completed as a thin 124-line compatibility entrypoint plus cohesive modules:
+> `lib/serve_app.py` (Handler/main), `lib/serve_pages.py` (page renderers),
+> `lib/serve_gallery.py` (file export, thumbnails, galleries),
+> `lib/serve_pipeline.py` (pipeline/queue process helpers), `lib/serve_ui.py`
+> (HTML/UI primitives), `lib/serve_queue_log.py` (queue log parsing/cache/render
+> core), `lib/serve_db.py`, `lib/serve_auth.py`, and `lib/serve_mapfile.py`.
+> Legacy helper names are re-exported by `bin/image-serve.py`; focused tests now
+> cover the extracted modules and dispatch path. `./tests/run-unit.sh`: 147
+> tests passing.
 
 
 All HTML generation, SQL logic, routing, and file serving are in a single 2007-line file. Adding new routes or modifying existing ones requires navigating the entire file.

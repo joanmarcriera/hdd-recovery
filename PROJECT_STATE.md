@@ -3,9 +3,9 @@
 ## Current Objective
 
 Backlog-driven recovery-effectiveness improvements. Most reliability work
-(F1–F8) has shipped; the active work is the #18 `bin/image-serve.py`
-maintainability split, keeping each extraction small and covered by offline
-unit tests.
+(F1–F8) has shipped. The #18 `bin/image-serve.py` maintainability split is now
+complete: the entrypoint is thin and the web UI logic lives in cohesive
+`lib/serve_*.py` modules with focused offline coverage.
 
 ## Completed Work (2026-06-20 session)
 
@@ -27,35 +27,40 @@ unit tests.
 - **Doc hygiene** — archived the stale 2026-05-04 Kingston handoff
   (`NEXT-RUN-TODO.md` → `.archive/`), removed stale live-pipeline state from
   `TODO.md`, refreshed the `image-serve.py` line count.
-- **#18 web UI split, second safe slice** — extracted read-only SQLite helpers
-  and analysis-DB discovery into `lib/serve_db.py`. `bin/image-serve.py`
-  imports/re-exports the same helper names, so existing route code and tests keep
-  their public call surface. Added direct coverage in
-  `tests/unit/test_serve_db.py`.
+- **#18 web UI split complete** — `bin/image-serve.py` is now a 124-line
+  compatibility entrypoint. The former monolith is split into:
+  `lib/serve_app.py` (Handler/main), `lib/serve_pages.py` (page renderers),
+  `lib/serve_gallery.py` (file export, thumbnails, galleries),
+  `lib/serve_pipeline.py` (pipeline/queue process helpers),
+  `lib/serve_ui.py` (HTML/UI primitives), `lib/serve_queue_log.py` (queue log
+  parsing/cache/render core), plus the earlier `lib/serve_db.py`,
+  `lib/serve_auth.py`, and `lib/serve_mapfile.py`. `bin/image-serve.py`
+  re-exports legacy helper names used by tests and older imports.
 
 ## Tests
 
-- `./tests/run-unit.sh` — 129 tests, all passing (added
+- `./tests/run-unit.sh` — 147 tests, all passing (added
   `tests/unit/test_encrypted.py`, `tests/unit/test_wordlist.py`,
-  `tests/unit/test_serve_db.py`, and registry assertions in
-  `tests/unit/test_pipeline.py`).
+  `tests/unit/test_serve_db.py`, `tests/unit/test_serve_queue_log.py`,
+  `tests/unit/test_serve_ui.py`, `tests/unit/test_serve_pipeline.py`,
+  `tests/unit/test_serve_gallery.py`, `tests/unit/test_serve_app.py`, and
+  registry assertions in `tests/unit/test_pipeline.py`).
 - Focused web/serve checks:
-  - `python3 -m unittest discover -s tests/unit -p 'test_serve*.py'` — 18 tests,
+  - `python3 -m unittest discover -s tests/unit -p 'test_serve*.py'` — 36 tests,
     all passing.
   - `python3 -m unittest discover -s tests/unit -p 'test_queue_log.py'` — 9
     tests, all passing.
-- Compile check: `python3 -m py_compile bin/image-serve.py lib/serve_db.py` —
+- Compile check over all `bin/image-serve.py` / `lib/serve_*.py` modules —
   passed.
 - Both new stages smoke-tested end-to-end against synthetic images/DBs (no source
   media).
 
 ## Next Recommended Action
 
-Continue **#18 split `bin/image-serve.py`**. The next low-risk slice is likely
-queue-log marker parsing/caching or generic HTML formatting helpers. Defer the
-full `Handler`/route split until it can be exercised against a running server.
+No active #18 work remains. Next exact action is to push the two local commits
+when desired, then choose the next backlog item from `IMPROVEMENTS.md`.
 
 ## Known Blockers
 
-None for offline refactor slices. Owner-side fixture/GPU verification items
-remain tracked in `STAGE1-PROGRESS.md`.
+None for #18. Owner-side fixture/GPU verification items remain tracked in
+`STAGE1-PROGRESS.md`.

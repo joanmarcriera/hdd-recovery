@@ -68,20 +68,23 @@
     deduped counts. No evidence deleted. Helper `wallet_dedup_counts()` in
     `bin/image-serve.py`; test in `tests/unit/test_serve_queries.py`.
 
-## Next
-
-- [ ] #18 split `bin/image-serve.py`. (in progress — 2026-06-20)
+- [x] #18 split `bin/image-serve.py`. (2026-06-20)
   - Completion criteria: extract cohesive route/page/db/util modules behind a
     thin entrypoint; keep the public routes unchanged; add or preserve focused
     unit coverage after each extraction; keep `./tests/run-unit.sh` green.
-  - Progress: `lib/serve_auth.py` + `lib/serve_mapfile.py` extracted (with new
-    `test_serve_mapfile.py`); `lib/serve_db.py` extracted for read-only SQL
-    helpers and analysis-DB discovery (with new `test_serve_db.py`). Entrypoint
-    re-imports these helpers so existing route code/tests keep working; suite
-    green at 129 tests.
-  - Remaining: page_* renderers, generic HTML/format helpers, queue-log helpers,
-    and the request Handler. The full Handler/route split is best done where the
-    running server can be exercised end-to-end.
+  - Completed as a thin 124-line compatibility entrypoint plus cohesive modules:
+    `lib/serve_app.py`, `lib/serve_pages.py`, `lib/serve_gallery.py`,
+    `lib/serve_pipeline.py`, `lib/serve_ui.py`, `lib/serve_queue_log.py`,
+    `lib/serve_db.py`, `lib/serve_auth.py`, and `lib/serve_mapfile.py`.
+    Legacy helper names are re-exported by `bin/image-serve.py` for tests and
+    existing imports. Suite green at 147 tests.
+
+## Next
+
+- [ ] Push local commits when ready, then select the next backlog item from
+  `IMPROVEMENTS.md`.
+  - Completion criteria: `git status --short --branch` shows no local commits
+    ahead of `origin/main`, or the next selected backlog item is recorded here.
 
 ## Backlog
 
