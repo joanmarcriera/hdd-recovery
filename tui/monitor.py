@@ -1,6 +1,7 @@
 """Lightweight system monitor widget — CPU sparkline, disk I/O, running-process timer."""
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from collections import deque
@@ -13,11 +14,14 @@ from textual.app import ComposeResult
 from textual.widget import Widget
 from textual.widgets import Static
 
+from devices import resolve_dest_dev
 from state import DiskInfo, fmt_elapsed
 
 # Unicode block chars for sparkline ▁▂▃▄▅▆▇█
 _SPARKS = "▁▂▃▄▅▆▇█"
-_DISK_DEV = "sdc"          # destination disk device name
+# Destination disk: derived from $MONITOR_DEST_DEV / the mount backing the
+# image-export root, falling back to "sdc" (the original recovery disk).
+_DISK_DEV = resolve_dest_dev()
 _HISTORY = 10              # sparkline width
 
 RECOVERY_PROCS = (
@@ -336,7 +340,7 @@ class SystemBar(Widget):
         self._label: Optional[Static] = None
 
     def compose(self) -> ComposeResult:
-        self._label = Static("[dim]CPU … │ sdc … │ checking processes…[/dim]", markup=True)
+        self._label = Static(f"[dim]CPU … │ {_DISK_DEV} … │ checking processes…[/dim]", markup=True)
         yield self._label
 
     def on_mount(self) -> None:
