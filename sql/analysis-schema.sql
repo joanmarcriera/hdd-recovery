@@ -25,7 +25,15 @@ CREATE TABLE IF NOT EXISTS scan_runs (
   command_line TEXT,
   log_path TEXT,
   output_dir TEXT,
-  notes TEXT
+  notes TEXT,
+  -- Supervision/durability (see lib/runs.py): record the owning process so a row
+  -- left 'running' by a kill/crash/restart can be reconciled to 'interrupted'.
+  pid INTEGER,
+  pgid INTEGER,
+  host TEXT,
+  heartbeat_at TEXT,
+  last_progress_at TEXT,
+  cancel_requested INTEGER DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS partitions (

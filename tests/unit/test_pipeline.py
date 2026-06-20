@@ -1,13 +1,16 @@
 """Unit tests for the pipeline/queue timeout backstop. Offline; spawns only
 short-lived `sleep`/`true` children."""
 import os
+import sqlite3
+import tempfile
 import time
 import unittest
 
-from _loader import load_module
+from _loader import REPO_ROOT, load_module
 
 pl = load_module("bin/image-pipeline.py")
 q = load_module("bin/image-queue.py")
+SCHEMA = REPO_ROOT / "sql" / "analysis-schema.sql"
 
 
 class TestRunCommand(unittest.TestCase):
@@ -64,6 +67,59 @@ class TestStageRegistry(unittest.TestCase):
     def test_ocr_not_in_full_preset(self):
         # Slow OCR must stay opt-in — not run automatically on every image.
         self.assertNotIn("ocr-seed-scan", pl.PRESETS["full"])
+
+
+class TestPrereqs(unittest.TestCase):
+    """F6 — requires_prior enforcement (skip stages with missing inputs)."""
+
+    def _db(self):
+        fd, path = tempfile.mkstemp(suffix=".analysis.sqlite")
+        os.close(fd)
+        conn = sqlite3.connect(path)
+        conn.executescript(SCHEMA.read_text())
+        conn.commit()
+        conn.close()
+        self.addCleanup(os.unlink, path)
+        return path
+
+    def _mark_ok(self, db, scan_run_key):
+        conn = sqlite3.connect(db)
+        conn.execute(
+            "INSERT INTO scan_runs(stage,status,started_at) VALUES (?,?,?)",
+            (scan_run_key, "ok", "2026-06-20T00:00:00Z"))
+        conn.commit()
+        conn.close()
+
+    def test_unmet_then_met(self):
+        idx = pl.stage_index()
+        stage = idx["text-seed-scan"]
+        prereqs = stage.requires_prior
+        self.assertTrue(prereqs, "fixture stage should have prerequisites")
+        db = self._db()
+        # nothing run yet → all prereqs unmet
+        self.assertEqual(pl.unmet_prerequisites(db, stage, idx), prereqs)
+        # satisfy the first prereq → it drops out of the unmet list
+        self._mark_ok(db, idx[prereqs[0]].scan_run_key)
+        self.assertEqual(pl.unmet_prerequisites(db, stage, idx), prereqs[1:])
+        # satisfy the rest → none unmet
+        for pk in prereqs[1:]:
+            self._mark_ok(db, idx[pk].scan_run_key)
+        self.assertEqual(pl.unmet_prerequisites(db, stage, idx), [])
+
+    def test_stage_without_prereqs(self):
+        idx = pl.stage_index()
+        stage = idx["structure-scan"]
+        self.assertEqual(pl.unmet_prerequisites(self._db(), stage, idx), [])
+
+
+class TestQueuePrereqPassthrough(unittest.TestCase):
+    def test_default_on(self):
+        cmd = q.build_cmd("/x.sqlite", ["a"], False, False)
+        self.assertIn("--require-prereqs", cmd)
+
+    def test_can_disable(self):
+        cmd = q.build_cmd("/x.sqlite", ["a"], False, False, require_prereqs=False)
+        self.assertNotIn("--require-prereqs", cmd)
 
 
 if __name__ == "__main__":

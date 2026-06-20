@@ -36,6 +36,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tui.stages import STAGES  # noqa: E402
+from lib.runs import reconcile_running  # noqa: E402
 
 ACQUISITION_PREFIXES = ("ddrescue-", "safecopy-")
 CRACKING_KEYS = {"crack-wallet", "crack-keepass", "btcrecover"}
@@ -118,6 +119,20 @@ def stage_is_done(db_path: str, scan_run_key: str) -> bool:
     finally:
         conn.close()
     return row is not None and row[0] == "ok"
+
+
+def unmet_prerequisites(db_path: str, stage, idx) -> list[str]:
+    """Return the requires_prior stage keys that are not yet status=ok in
+    scan_runs. Only DB-tracked prerequisites (those with a scan_run_key) are
+    checked; untracked/unknown prereqs are not treated as blockers."""
+    unmet = []
+    for pk in getattr(stage, "requires_prior", None) or []:
+        prereq = idx.get(pk)
+        if prereq is None or not prereq.scan_run_key:
+            continue
+        if not stage_is_done(db_path, prereq.scan_run_key):
+            unmet.append(pk)
+    return unmet
 
 
 def log(msg: str, fh=None) -> None:
@@ -263,6 +278,10 @@ def main() -> int:
                     help="continue after a stage fails")
     ap.add_argument("--skip-done", action="store_true",
                     help="skip stages whose most recent completed scan_run has status=ok")
+    ap.add_argument("--require-prereqs", action="store_true",
+                    help="skip a stage when its requires_prior stages are not yet "
+                         "status=ok (recommended for unattended queues so a stage "
+                         "with missing inputs doesn't burn hours)")
     ap.add_argument("--list", action="store_true",
                     help="list eligible stage keys and exit")
     ap.add_argument("--list-presets", action="store_true",
@@ -337,12 +356,23 @@ def main() -> int:
     log(f"Export root: {ctx['export_root']}", fh)
     log(f"Mode:        {'RUN' if args.run else 'dry-run'}"
         f"{'  keep-going' if args.keep_going else ''}"
-        f"{'  skip-done' if args.skip_done else ''}", fh)
+        f"{'  skip-done' if args.skip_done else ''}"
+        f"{'  require-prereqs' if args.require_prereqs else ''}", fh)
     log(f"Stage limit: {stage_timeout}s" if stage_timeout > 0
         else "Stage limit: disabled", fh)
     if fh:
         log(f"Runner log:  {log_path}", fh)
     log(f"Plan:        {len(plan)} stage(s) — {' → '.join(s.key for s in plan)}", fh)
+
+    # Correct any rows a previous kill/crash/restart left stuck at 'running'
+    # before we start, so status reflects reality. Never fatal.
+    if args.run:
+        try:
+            reconciled = reconcile_running(args.db)
+            if reconciled:
+                log(f"Reconciled:  {reconciled} stale 'running' run(s) -> interrupted", fh)
+        except Exception as e:
+            log(f"  (reconcile skipped: {e})", fh)
     log("", fh)
 
     results: list[tuple[str, str, float, int]] = []
@@ -353,6 +383,12 @@ def main() -> int:
             log(f"  SKIP: already completed (status=ok in scan_runs)", fh)
             results.append((s.key, "skipped", 0.0, 0))
             continue
+        if args.require_prereqs:
+            unmet = unmet_prerequisites(args.db, s, idx)
+            if unmet:
+                log(f"  SKIP: prerequisites not ok: {', '.join(unmet)}", fh)
+                results.append((s.key, "skipped", 0.0, 0))
+                continue
         if s.warning:
             log(f"  WARNING: {s.warning}", fh)
         try:

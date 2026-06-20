@@ -88,6 +88,13 @@ migrations = [
     ("recovered_artifacts", "dedup_cluster_id", "INTEGER"),
     ("recovered_artifacts", "is_cluster_primary", "INTEGER DEFAULT 0"),
     ("recovered_artifacts", "quality_score", "REAL"),
+    # scan_runs supervision columns (lib/runs.py reconciliation)
+    ("scan_runs", "pid", "INTEGER"),
+    ("scan_runs", "pgid", "INTEGER"),
+    ("scan_runs", "host", "TEXT"),
+    ("scan_runs", "heartbeat_at", "TEXT"),
+    ("scan_runs", "last_progress_at", "TEXT"),
+    ("scan_runs", "cancel_requested", "INTEGER DEFAULT 0"),
 ]
 
 conn = sqlite3.connect(db_path)
@@ -118,12 +125,20 @@ run_sql() {
 
 record_scan_start() {
   local db="$1" stage="$2" cmdline="$3" log_path="$4" output_dir="$5"
-  local started_at
+  # Make sure the supervision columns exist on older DBs before inserting them.
+  apply_schema_migrations "$db"
+  local started_at pid pgid host
   started_at="$(timestamp_utc)"
+  # $$ is this script's PID (the long-lived process the runner would kill);
+  # under start_new_session it is also the process-group leader.
+  pid="$$"
+  pgid="$(ps -o pgid= -p "$$" 2>/dev/null | tr -d ' ')"
+  [[ "$pgid" =~ ^[0-9]+$ ]] || pgid="NULL"
+  host="$(hostname 2>/dev/null || printf '')"
   local sql
   sql=$(cat <<EOF
-INSERT INTO scan_runs(stage,status,started_at,command_line,log_path,output_dir)
-VALUES('$(sql_escape "$stage")','running','$(sql_escape "$started_at")','$(sql_escape "$cmdline")','$(sql_escape "$log_path")','$(sql_escape "$output_dir")');
+INSERT INTO scan_runs(stage,status,started_at,command_line,log_path,output_dir,pid,pgid,host,heartbeat_at)
+VALUES('$(sql_escape "$stage")','running','$(sql_escape "$started_at")','$(sql_escape "$cmdline")','$(sql_escape "$log_path")','$(sql_escape "$output_dir")',$pid,$pgid,'$(sql_escape "$host")','$(sql_escape "$started_at")');
 SELECT last_insert_rowid();
 EOF
 )
