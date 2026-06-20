@@ -68,5 +68,35 @@ class TestResolveDestDev(unittest.TestCase):
                                  candidates=["/data/exports"]), "sdc")
 
 
+ZPOOL = """  pool: tank
+ state: ONLINE
+config:
+\tNAME        STATE     READ WRITE CKSUM
+\ttank        ONLINE       0     0     0
+\t  mirror-0  ONLINE       0     0     0
+\t    sdb     ONLINE       0     0     0
+\t    sdd1    ONLINE       0     0     0
+"""
+
+
+class TestBlockedDevices(unittest.TestCase):
+    def test_mounted_whole_disks(self):
+        # root sda + recovery sdc + nvme0n1; ZFS dataset has no /dev source.
+        got = dev.mounted_whole_disks(MOUNTS)
+        self.assertEqual(got, {"sda", "sdc", "nvme0n1"})
+
+    def test_zfs_members_only_devices(self):
+        got = dev.zfs_member_disks(ZPOOL)
+        # sdb + sdd (sdd1 stripped); pool name and ONLINE/STATE ignored
+        self.assertEqual(got, {"sdb", "sdd"})
+
+    def test_blocked_union_with_dest(self):
+        blocked = dev.blocked_devices(MOUNTS, ZPOOL, dest_dev="sdc1")
+        self.assertEqual(blocked, {"sda", "sdc", "nvme0n1", "sdb", "sdd"})
+
+    def test_blocked_empty_inputs(self):
+        self.assertEqual(dev.blocked_devices(), set())
+
+
 if __name__ == "__main__":
     unittest.main()
