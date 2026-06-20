@@ -1,5 +1,44 @@
 # Decisions
 
+## 2026-06-20 — Useful Progress Is Separate From Console Output
+
+**Decision:** F3 adds useful-progress probes to `lib/watchdog.py` rather than
+treating stdout/stderr output as proof of progress. The pipeline and queue paths
+now use `STAGE_PROGRESS_TIMEOUT` and `STAGE_PROGRESS_INTERVAL` with per-stage
+counters from `lib/progress.py`; `scan_runs.heartbeat_at` is refreshed on probe
+polls and `scan_runs.last_progress_at` is refreshed only when the counter
+advances. Pipeline stdout-idle timeout is available through `STAGE_IDLE_TIMEOUT`
+but defaults to disabled.
+
+**Alternatives considered:**
+
+- Rely only on the F1 stdout-idle timeout.
+- Add progress updates inside each individual recovery shell script.
+- Treat log mtime as progress for every stage.
+
+**Rationale:** Tools such as `bulk_extractor` can print repeated progress lines
+while producing no new feature files, so stdout is not a reliable liveness
+signal. Keeping probes in the supervisor avoids touching many forensic stage
+scripts and lets offline tests exercise ddrescue maps, directories, and SQLite
+row-count signals directly. Log mtime remains a fallback only when no stronger
+stage output signal exists.
+
+**Consequences:**
+
+- A noisy process whose output directory or DB counter stalls can now be killed
+  with rc `124` before the 12-hour wall timeout.
+- Stages that create no measurable output before a long internal scan need a
+  conservative `STAGE_PROGRESS_TIMEOUT` or an explicit override of `0`.
+- The active `scan_runs` row now carries heartbeat/progress timestamps useful to
+  F7 monitor stuckness.
+
+**Revisit if:**
+
+- A stage is found to be legitimately quiet for longer than the default progress
+  timeout and needs a stage-specific timeout or probe.
+- F4 durable supervised runs need the same progress-probe data outside
+  per-image `scan_runs`.
+
 ## 2026-06-20 — Shared Watchdog Runner Uses Async Core With Sync Wrapper
 
 **Decision:** Stage supervision now lives in `lib/watchdog.py`. The shared core

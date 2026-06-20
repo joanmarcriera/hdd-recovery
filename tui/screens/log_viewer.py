@@ -14,8 +14,11 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, RichLog
 
 from executor import build_command, launch, launch_cmd
+from lib.progress import build_stage_progress_probe
 from lib.watchdog import (
     DEFAULT_IDLE_TIMEOUT,
+    DEFAULT_PROGRESS_INTERVAL,
+    DEFAULT_PROGRESS_TIMEOUT,
     DEFAULT_STAGE_TIMEOUT,
     stream_process,
     timeout_from_env,
@@ -136,11 +139,26 @@ class LogViewerScreen(Screen):
         pid = self._process.pid
         wall_timeout = timeout_from_env("STAGE_TIMEOUT", DEFAULT_STAGE_TIMEOUT)
         idle_timeout = timeout_from_env("STAGE_IDLE_TIMEOUT", DEFAULT_IDLE_TIMEOUT)
+        progress_timeout = timeout_from_env(
+            "STAGE_PROGRESS_TIMEOUT",
+            DEFAULT_PROGRESS_TIMEOUT,
+        )
+        progress_interval = timeout_from_env(
+            "STAGE_PROGRESS_INTERVAL",
+            DEFAULT_PROGRESS_INTERVAL,
+        )
+        progress_probe = build_stage_progress_probe(
+            str(self.disk.db_path),
+            self.stage.scan_run_key,
+            map_path=str(self.disk.map_path) if self.disk.map_path else "",
+        )
         limits = []
         if wall_timeout > 0:
             limits.append(f"wall {wall_timeout}s")
         if idle_timeout > 0:
             limits.append(f"idle {idle_timeout}s")
+        if progress_timeout > 0 and progress_probe is not None:
+            limits.append(f"progress {progress_timeout}s")
         limit_text = ", ".join(limits) if limits else "timeouts disabled"
         status_label.update(
             f"[cyan]Running PID {pid} ({escape(limit_text)})… "
@@ -165,13 +183,23 @@ class LogViewerScreen(Screen):
                 self._process,
                 wall_timeout=wall_timeout,
                 idle_timeout=idle_timeout,
+                progress_timeout=progress_timeout,
+                progress_interval=progress_interval,
+                progress_probe=progress_probe,
+                on_progress=progress_probe.mark_progress if progress_probe else None,
                 on_output=write_output,
                 log_event=write_event,
             )
         except asyncio.CancelledError:
             if self._process and self._process.returncode is None:
                 asyncio.ensure_future(
-                    self._supervise_detached(wall_timeout, idle_timeout)
+                    self._supervise_detached(
+                        wall_timeout,
+                        idle_timeout,
+                        progress_timeout,
+                        progress_interval,
+                        progress_probe,
+                    )
                 )
             raise
 
@@ -182,7 +210,12 @@ class LogViewerScreen(Screen):
             log.write(f"\n[green]✓ Finished successfully  (exit 0, {elapsed:.0f}s)[/green]")
             status_label.update(f"[green]Done in {elapsed:.0f}s — B to go back[/green]")
         elif result.timed_out:
-            label = "Idle timeout" if result.timeout_kind == "idle" else "Wall timeout"
+            if result.timeout_kind == "idle":
+                label = "Idle timeout"
+            elif result.timeout_kind == "progress":
+                label = "Progress timeout"
+            else:
+                label = "Wall timeout"
             log.write(
                 f"\n[bold red]✗ {escape(label)} "
                 f"(exit {rc}, {elapsed:.0f}s)[/bold red]"
@@ -194,7 +227,14 @@ class LogViewerScreen(Screen):
 
         self._done = True
 
-    async def _supervise_detached(self, wall_timeout: int, idle_timeout: int) -> None:
+    async def _supervise_detached(
+        self,
+        wall_timeout: int,
+        idle_timeout: int,
+        progress_timeout: int,
+        progress_interval: int,
+        progress_probe,
+    ) -> None:
         """Keep supervising a process after the log screen is popped."""
         try:
             process = self._process
@@ -204,6 +244,10 @@ class LogViewerScreen(Screen):
                 process,
                 wall_timeout=wall_timeout,
                 idle_timeout=idle_timeout,
+                progress_timeout=progress_timeout,
+                progress_interval=progress_interval,
+                progress_probe=progress_probe,
+                on_progress=progress_probe.mark_progress if progress_probe else None,
             )
         except Exception:
             pass

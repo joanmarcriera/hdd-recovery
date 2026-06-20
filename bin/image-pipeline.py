@@ -34,10 +34,14 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tui.stages import STAGES  # noqa: E402
 from lib.runs import reconcile_running  # noqa: E402
+from lib.progress import build_stage_progress_probe  # noqa: E402
 from lib.watchdog import (  # noqa: E402
+    DEFAULT_PROGRESS_INTERVAL,
+    DEFAULT_PROGRESS_TIMEOUT,
     DEFAULT_STAGE_TIMEOUT,
     TIMEOUT_RC,
     run_command_sync,
+    timeout_from_env,
 )
 
 ACQUISITION_PREFIXES = ("ddrescue-", "safecopy-")
@@ -203,8 +207,18 @@ def resolve_args(stage, ctx: dict[str, str]) -> list[str]:
     return out
 
 
+def _float_env(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(os.environ.get(name, default)))
+    except ValueError:
+        return default
+
+
 def run_command(cmd: list[str], env: dict[str, str], timeout: int,
-                fh=None) -> tuple[int, float]:
+                fh=None, idle_timeout: int = 0,
+                progress_timeout: float = 0,
+                progress_interval: float = DEFAULT_PROGRESS_INTERVAL,
+                progress_probe=None, on_progress=None) -> tuple[int, float]:
     """Run cmd to completion, returning (rc, elapsed_seconds). A positive
     timeout kills the whole process group and returns TIMEOUT_RC. Testable in
     isolation (no stage/db objects required)."""
@@ -219,6 +233,11 @@ def run_command(cmd: list[str], env: dict[str, str], timeout: int,
             cmd,
             env=env,
             wall_timeout=timeout,
+            idle_timeout=idle_timeout,
+            progress_timeout=progress_timeout,
+            progress_interval=progress_interval,
+            progress_probe=progress_probe,
+            on_progress=on_progress,
             on_output=emit_output,
             log_event=lambda msg: log(msg, fh),
         )
@@ -230,7 +249,10 @@ def run_command(cmd: list[str], env: dict[str, str], timeout: int,
 
 def run_stage(stage, ctx: dict[str, str], do_run: bool, fh,
               extra_env: dict[str, str] | None = None,
-              timeout: int = 0) -> tuple[int, float]:
+              timeout: int = 0,
+              idle_timeout: int = 0,
+              progress_timeout: float = 0,
+              progress_interval: float = DEFAULT_PROGRESS_INTERVAL) -> tuple[int, float]:
     script = ROOT / "bin" / stage.script
     if not script.exists():
         log(f"  ERROR: script not found: {script}", fh)
@@ -242,8 +264,23 @@ def run_stage(stage, ctx: dict[str, str], do_run: bool, fh,
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
+    progress_probe = build_stage_progress_probe(
+        ctx["db"],
+        stage.scan_run_key,
+        map_path=ctx.get("mapfile", ""),
+    )
     try:
-        return run_command(cmd, env, timeout, fh)
+        return run_command(
+            cmd,
+            env,
+            timeout,
+            fh,
+            idle_timeout=idle_timeout,
+            progress_timeout=progress_timeout,
+            progress_interval=progress_interval,
+            progress_probe=progress_probe,
+            on_progress=progress_probe.mark_progress if progress_probe else None,
+        )
     except FileNotFoundError:
         log(f"  ERROR: cannot execute: {script}", fh)
         return 127, 0.0
@@ -275,16 +312,41 @@ def main() -> int:
                     help="per-stage wall-clock limit in seconds (0 disables; "
                          "default from STAGE_TIMEOUT env or "
                          f"{DEFAULT_STAGE_TIMEOUT})")
+    ap.add_argument("--stage-idle-timeout", type=int, default=None,
+                    help="per-stage stdout/stderr idle limit in seconds "
+                         "(0 disables; default from STAGE_IDLE_TIMEOUT env or 0)")
+    ap.add_argument("--stage-progress-timeout", type=int, default=None,
+                    help="per-stage useful-progress idle limit in seconds "
+                         "(0 disables; default from STAGE_PROGRESS_TIMEOUT env "
+                         f"or {DEFAULT_PROGRESS_TIMEOUT})")
+    ap.add_argument("--stage-progress-interval", type=float, default=None,
+                    help="seconds between useful-progress probes (default from "
+                         "STAGE_PROGRESS_INTERVAL env or "
+                         f"{DEFAULT_PROGRESS_INTERVAL})")
     args = ap.parse_args()
 
     if args.stage_timeout is not None:
         stage_timeout = args.stage_timeout
     else:
-        try:
-            stage_timeout = int(os.environ.get("STAGE_TIMEOUT",
-                                               DEFAULT_STAGE_TIMEOUT))
-        except ValueError:
-            stage_timeout = DEFAULT_STAGE_TIMEOUT
+        stage_timeout = timeout_from_env("STAGE_TIMEOUT", DEFAULT_STAGE_TIMEOUT)
+    if args.stage_idle_timeout is not None:
+        stage_idle_timeout = args.stage_idle_timeout
+    else:
+        stage_idle_timeout = timeout_from_env("STAGE_IDLE_TIMEOUT", 0)
+    if args.stage_progress_timeout is not None:
+        stage_progress_timeout = args.stage_progress_timeout
+    else:
+        stage_progress_timeout = timeout_from_env(
+            "STAGE_PROGRESS_TIMEOUT",
+            DEFAULT_PROGRESS_TIMEOUT,
+        )
+    if args.stage_progress_interval is not None:
+        stage_progress_interval = max(0.1, args.stage_progress_interval)
+    else:
+        stage_progress_interval = max(
+            0.1,
+            _float_env("STAGE_PROGRESS_INTERVAL", DEFAULT_PROGRESS_INTERVAL),
+        )
 
     if args.list:
         list_stages()
@@ -343,6 +405,11 @@ def main() -> int:
         f"{'  require-prereqs' if args.require_prereqs else ''}", fh)
     log(f"Stage limit: {stage_timeout}s" if stage_timeout > 0
         else "Stage limit: disabled", fh)
+    log(f"Stdout idle:  {stage_idle_timeout}s" if stage_idle_timeout > 0
+        else "Stdout idle:  disabled", fh)
+    log(f"Progress idle: {stage_progress_timeout}s"
+        if stage_progress_timeout > 0 else "Progress idle: disabled", fh)
+    log(f"Progress probe interval: {stage_progress_interval:g}s", fh)
     if fh:
         log(f"Runner log:  {log_path}", fh)
     log(f"Plan:        {len(plan)} stage(s) — {' → '.join(s.key for s in plan)}", fh)
@@ -375,7 +442,17 @@ def main() -> int:
         if s.warning:
             log(f"  WARNING: {s.warning}", fh)
         try:
-            rc, dt = run_stage(s, ctx, args.run, fh, extra_env, stage_timeout)
+            rc, dt = run_stage(
+                s,
+                ctx,
+                args.run,
+                fh,
+                extra_env,
+                stage_timeout,
+                stage_idle_timeout,
+                stage_progress_timeout,
+                stage_progress_interval,
+            )
         except KeyboardInterrupt:
             results.append((s.key, "interrupted", 0.0, 130))
             failed_any = True

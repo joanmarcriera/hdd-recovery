@@ -2,6 +2,7 @@
 short-lived `sleep`/`true` children."""
 import os
 import sqlite3
+import sys
 import tempfile
 import time
 import unittest
@@ -10,6 +11,7 @@ from _loader import REPO_ROOT, load_module
 
 pl = load_module("bin/image-pipeline.py")
 q = load_module("bin/image-queue.py")
+prog = load_module("lib/progress.py")
 SCHEMA = REPO_ROOT / "sql" / "analysis-schema.sql"
 
 
@@ -33,6 +35,27 @@ class TestRunCommand(unittest.TestCase):
         rc, dt = pl.run_command(["true"], os.environ.copy(), 0)
         self.assertEqual(rc, 0)
 
+    def test_progress_timeout_on_pipeline_wrapper(self):
+        with tempfile.TemporaryDirectory() as td:
+            script = (
+                "from pathlib import Path\n"
+                "import sys, time\n"
+                "Path(sys.argv[1], 'once.txt').write_text('x')\n"
+                "end = time.time() + 30\n"
+                "while time.time() < end:\n"
+                "    print('noisy', flush=True)\n"
+                "    time.sleep(0.1)\n"
+            )
+            rc, dt = pl.run_command(
+                [sys.executable, "-c", script, td],
+                os.environ.copy(),
+                0,
+                progress_timeout=1,
+                progress_interval=0.1,
+                progress_probe=lambda: prog.directory_work_counter(td),
+            )
+        self.assertEqual(rc, pl.TIMEOUT_RC)
+
 
 class TestQueueBuildCmd(unittest.TestCase):
     def test_stage_timeout_passthrough(self):
@@ -44,6 +67,20 @@ class TestQueueBuildCmd(unittest.TestCase):
     def test_no_timeout_when_none(self):
         cmd = q.build_cmd("/x.sqlite", ["a"], False, False, None)
         self.assertNotIn("--stage-timeout", cmd)
+
+    def test_progress_timeout_passthrough(self):
+        cmd = q.build_cmd(
+            "/x.sqlite",
+            ["a"],
+            False,
+            False,
+            stage_progress_timeout=600,
+            stage_progress_interval=5,
+        )
+        self.assertIn("--stage-progress-timeout", cmd)
+        self.assertIn("600", cmd)
+        self.assertIn("--stage-progress-interval", cmd)
+        self.assertIn("5", cmd)
 
 
 class TestStageRegistry(unittest.TestCase):

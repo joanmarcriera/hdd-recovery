@@ -62,6 +62,50 @@ class TestWatchdog(unittest.TestCase):
         self.assertEqual(result.timeout_kind, "idle")
         self.assertIn("READY", "".join(outputs))
 
+    def test_progress_timeout_ignores_stdout_chatter(self):
+        script = (
+            "import time\n"
+            "end = time.time() + 30\n"
+            "while time.time() < end:\n"
+            "    print('still noisy', flush=True)\n"
+            "    time.sleep(0.1)\n"
+        )
+
+        result = _run(
+            wd.run_command_async(
+                [sys.executable, "-c", script],
+                progress_timeout=1,
+                progress_interval=0.1,
+                progress_probe=lambda: 0,
+            )
+        )
+
+        self.assertEqual(result.rc, wd.TIMEOUT_RC)
+        self.assertTrue(result.timed_out)
+        self.assertEqual(result.timeout_kind, "progress")
+
+    def test_progress_advance_resets_deadline(self):
+        values = {"n": 0}
+        seen = []
+
+        def probe():
+            values["n"] += 1
+            return values["n"]
+
+        result = _run(
+            wd.run_command_async(
+                [sys.executable, "-c", "import time; time.sleep(0.8)"],
+                progress_timeout=0.3,
+                progress_interval=0.1,
+                progress_probe=probe,
+                on_progress=seen.append,
+            )
+        )
+
+        self.assertEqual(result.rc, 0)
+        self.assertFalse(result.timed_out)
+        self.assertGreaterEqual(len(seen), 2)
+
     def test_timeout_kills_child_process_group(self):
         outputs = []
         script = (

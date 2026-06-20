@@ -12,6 +12,8 @@ from typing import Any
 
 DEFAULT_STAGE_TIMEOUT = 43200  # 12h; matches the historical CLI default
 DEFAULT_IDLE_TIMEOUT = 3600    # 1h without stdout/stderr output
+DEFAULT_PROGRESS_TIMEOUT = 3600
+DEFAULT_PROGRESS_INTERVAL = 30
 TIMEOUT_RC = 124               # matches coreutils `timeout`
 KILL_GRACE_S = 10              # SIGTERM -> SIGKILL grace for the process group
 
@@ -33,10 +35,10 @@ def timeout_from_env(name: str, default: int) -> int:
         return default
 
 
-async def _emit(callback: Callable[[str], Any] | None, text: str) -> None:
+async def _emit(callback: Callable[[Any], Any] | None, value: Any) -> None:
     if callback is None:
         return
-    result = callback(text)
+    result = callback(value)
     if inspect.isawaitable(result):
         await result
 
@@ -66,27 +68,39 @@ async def terminate_process_group(
             continue
 
 
-def _next_deadline(
+def _next_event(
     *,
     start: float,
     last_output: float,
-    wall_timeout: int,
-    idle_timeout: int,
+    last_progress: float,
+    next_probe: float | None,
+    wall_timeout: float,
+    idle_timeout: float,
+    progress_timeout: float,
 ) -> tuple[str | None, float | None]:
-    deadlines: list[tuple[str, float]] = []
+    events: list[tuple[str, float]] = []
     if wall_timeout > 0:
-        deadlines.append(("wall", start + wall_timeout))
+        events.append(("wall", start + wall_timeout))
     if idle_timeout > 0:
-        deadlines.append(("idle", last_output + idle_timeout))
-    if not deadlines:
+        events.append(("idle", last_output + idle_timeout))
+    if progress_timeout > 0:
+        events.append(("progress", last_progress + progress_timeout))
+    if next_probe is not None:
+        events.append(("probe", next_probe))
+    if not events:
         return None, None
-    return min(deadlines, key=lambda item: item[1])
+    return min(events, key=lambda item: item[1])
 
 
 def _timeout_message(kind: str, timeout_s: int) -> str:
     if kind == "idle":
         return (
             f"  IDLE TIMEOUT after {timeout_s}s without output "
+            f"- terminating stage process group"
+        )
+    if kind == "progress":
+        return (
+            f"  PROGRESS TIMEOUT after {timeout_s}s without useful progress "
             f"- terminating stage process group"
         )
     return f"  TIMEOUT after {timeout_s}s - terminating stage process group"
@@ -97,6 +111,10 @@ async def stream_process(
     *,
     wall_timeout: int = 0,
     idle_timeout: int = 0,
+    progress_timeout: float = 0,
+    progress_interval: float = DEFAULT_PROGRESS_INTERVAL,
+    progress_probe: Callable[[], Any] | None = None,
+    on_progress: Callable[[float], Any] | None = None,
     on_output: Callable[[str], Any] | None = None,
     log_event: Callable[[str], Any] | None = None,
 ) -> WatchdogResult:
@@ -108,6 +126,13 @@ async def stream_process(
     """
     start = time.monotonic()
     last_output = start
+    last_progress = start
+    last_probe_value: float | None = None
+    if progress_probe is not None and progress_timeout > 0:
+        next_probe: float | None = start
+        progress_interval = max(0.1, progress_interval)
+    else:
+        next_probe = None
     wait_task = asyncio.create_task(process.wait())
     read_task: asyncio.Task[bytes] | None = None
     stdout = process.stdout
@@ -120,11 +145,14 @@ async def stream_process(
             if read_task is not None:
                 tasks.add(read_task)
 
-            kind, deadline = _next_deadline(
+            kind, deadline = _next_event(
                 start=start,
                 last_output=last_output,
+                last_progress=last_progress,
+                next_probe=next_probe,
                 wall_timeout=wall_timeout,
                 idle_timeout=idle_timeout,
+                progress_timeout=progress_timeout if next_probe is not None else 0,
             )
             wait_s = None if deadline is None else max(0.0, deadline - time.monotonic())
             done, _ = await asyncio.wait(
@@ -135,7 +163,31 @@ async def stream_process(
 
             if not done:
                 assert kind is not None
-                timeout_s = idle_timeout if kind == "idle" else wall_timeout
+                if kind == "probe":
+                    assert progress_probe is not None
+                    value = progress_probe()
+                    if inspect.isawaitable(value):
+                        value = await value
+                    if value is not None:
+                        value = float(value)
+                        advanced = (
+                            last_probe_value is None and value > 0
+                        ) or (
+                            last_probe_value is not None
+                            and value > last_probe_value
+                        )
+                        last_probe_value = value
+                        if advanced:
+                            last_progress = time.monotonic()
+                            await _emit(on_progress, value)
+                    next_probe = time.monotonic() + progress_interval
+                    continue
+                if kind == "idle":
+                    timeout_s = idle_timeout
+                elif kind == "progress":
+                    timeout_s = progress_timeout
+                else:
+                    timeout_s = wall_timeout
                 message = _timeout_message(kind, timeout_s)
                 await _emit(log_event, message)
                 await terminate_process_group(process)
@@ -198,6 +250,10 @@ async def run_command_async(
     env: dict[str, str] | None = None,
     wall_timeout: int = 0,
     idle_timeout: int = 0,
+    progress_timeout: float = 0,
+    progress_interval: float = DEFAULT_PROGRESS_INTERVAL,
+    progress_probe: Callable[[], Any] | None = None,
+    on_progress: Callable[[float], Any] | None = None,
     stdin_data: bytes = b"",
     on_start: Callable[[asyncio.subprocess.Process], Any] | None = None,
     on_output: Callable[[str], Any] | None = None,
@@ -224,6 +280,10 @@ async def run_command_async(
             process,
             wall_timeout=wall_timeout,
             idle_timeout=idle_timeout,
+            progress_timeout=progress_timeout,
+            progress_interval=progress_interval,
+            progress_probe=progress_probe,
+            on_progress=on_progress,
             on_output=on_output,
             log_event=log_event,
         )
@@ -239,6 +299,10 @@ def run_command_sync(
     env: dict[str, str] | None = None,
     wall_timeout: int = 0,
     idle_timeout: int = 0,
+    progress_timeout: float = 0,
+    progress_interval: float = DEFAULT_PROGRESS_INTERVAL,
+    progress_probe: Callable[[], Any] | None = None,
+    on_progress: Callable[[float], Any] | None = None,
     on_output: Callable[[str], Any] | None = None,
     log_event: Callable[[str], Any] | None = None,
 ) -> WatchdogResult:
@@ -249,6 +313,10 @@ def run_command_sync(
             env=env,
             wall_timeout=wall_timeout,
             idle_timeout=idle_timeout,
+            progress_timeout=progress_timeout,
+            progress_interval=progress_interval,
+            progress_probe=progress_probe,
+            on_progress=on_progress,
             on_output=on_output,
             log_event=log_event,
         )

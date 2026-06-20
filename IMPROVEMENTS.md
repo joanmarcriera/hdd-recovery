@@ -393,13 +393,18 @@ durable, **progress-aware** run supervisor. Eight findings (F1–F8).
   wall/idle timeout results and keeps a detached watchdog active after leaving
   the live log screen. Tests in `tests/unit/test_watchdog.py` and
   `tests/unit/test_pipeline.py`.
+- **F3 — Useful-progress probes + progress timeout.** `lib/watchdog.py` now
+  accepts progress probes and kills with rc=124 on `progress` timeout even when
+  stdout is noisy. `lib/progress.py` provides ddrescue-map, directory, mtime and
+  SQLite row-count counters and updates `scan_runs.heartbeat_at` /
+  `last_progress_at` for the active running row. `image-pipeline.py`,
+  `image-queue.py`, and the TUI log viewer wire `STAGE_IDLE_TIMEOUT`,
+  `STAGE_PROGRESS_TIMEOUT`, and `STAGE_PROGRESS_INTERVAL`. Tests in
+  `tests/unit/test_progress.py`, `tests/unit/test_watchdog.py`, and
+  `tests/unit/test_pipeline.py`.
 
 ### Pending (bigger, build on F2's durable columns)
 
-- **F3 — Useful-progress probes + idle timeout.** Per-stage probes (ddrescue
-  rescued bytes, log mtime, output-dir size, artifact count, queue-marker age, DB
-  row count); kill/pause after "no useful progress for N min" (`last_progress_at`
-  column is ready).
 - **F4 — Durable job table for queue/detached runs.** Replace pgrep-only queue
   detection with a supervised-runs record (PID/PGID, log, heartbeat, cancel).
 - **F5 — Maintain `crack_tasks` progress.** Parse `hashcat --status` into

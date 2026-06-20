@@ -16,15 +16,21 @@
     viewer; focused async unit tests cover timeout and cancellation cleanup;
     `./tests/run-unit.sh` passes.
 
-## Next
-
-- [ ] F3 useful-progress probes and progress-aware idle timeout.
+- [x] F3 useful-progress probes and progress-aware idle timeout.
   - Completion criteria: update `scan_runs.heartbeat_at` and
     `scan_runs.last_progress_at` from per-stage probes; support ddrescue map
     rescued bytes, output directory growth, DB row-count growth, queue-marker
     age, and log mtime where applicable; kill or pause stages that produce no
     useful progress for the configured window; add focused tests without
     touching source media.
+
+## Next
+
+- [ ] F4 durable job table for queue/detached runs.
+  - Completion criteria: add a `supervised_runs` table with PID/PGID, command,
+    log, heartbeat, last progress, cancel flag and final status; write it when
+    web queue or detached pipeline jobs launch; replace pgrep-only queue
+    detection; reconcile stale rows at startup; add focused unit tests.
 
 - [ ] #18 split `bin/image-serve.py`.
   - Completion criteria: extract cohesive route/page/db/util modules behind a

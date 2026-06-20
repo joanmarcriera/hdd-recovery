@@ -37,6 +37,9 @@ def _ts() -> str:
 
 def build_cmd(db: str, stages: list[str], skip_done: bool, keep_going: bool,
               stage_timeout: int | None = None,
+              stage_idle_timeout: int | None = None,
+              stage_progress_timeout: int | None = None,
+              stage_progress_interval: float | None = None,
               require_prereqs: bool = True) -> list[str]:
     """Build the image-pipeline.py command for one image (pure/testable)."""
     cmd = [sys.executable, str(PIPELINE), db, "--run"]
@@ -48,13 +51,23 @@ def build_cmd(db: str, stages: list[str], skip_done: bool, keep_going: bool,
         cmd.append("--require-prereqs")
     if stage_timeout is not None:
         cmd += ["--stage-timeout", str(stage_timeout)]
+    if stage_idle_timeout is not None:
+        cmd += ["--stage-idle-timeout", str(stage_idle_timeout)]
+    if stage_progress_timeout is not None:
+        cmd += ["--stage-progress-timeout", str(stage_progress_timeout)]
+    if stage_progress_interval is not None:
+        cmd += ["--stage-progress-interval", str(stage_progress_interval)]
     cmd += stages
     return cmd
 
 
 def run_one(db: str, stages, skip_done, keep_going, stage_timeout=None,
+            stage_idle_timeout=None, stage_progress_timeout=None,
+            stage_progress_interval=None,
             require_prereqs=True) -> int:
     cmd = build_cmd(db, stages, skip_done, keep_going, stage_timeout,
+                    stage_idle_timeout, stage_progress_timeout,
+                    stage_progress_interval,
                     require_prereqs)
     name = Path(db).name
     print(f"[{_ts()}] START {name}", flush=True)
@@ -79,6 +92,15 @@ def main() -> int:
     ap.add_argument("--stage-timeout", type=int, default=None,
                     help="per-stage wall-clock limit (s) passed to each image "
                          "pipeline; 0 disables, default from STAGE_TIMEOUT env")
+    ap.add_argument("--stage-idle-timeout", type=int, default=None,
+                    help="per-stage stdout/stderr idle limit passed through to "
+                         "image-pipeline.py")
+    ap.add_argument("--stage-progress-timeout", type=int, default=None,
+                    help="per-stage useful-progress idle limit passed through "
+                         "to image-pipeline.py")
+    ap.add_argument("--stage-progress-interval", type=float, default=None,
+                    help="seconds between useful-progress probes passed through "
+                         "to image-pipeline.py")
     ap.add_argument("--require-prereqs", action=argparse.BooleanOptionalAction,
                     default=True,
                     help="skip stages whose requires_prior aren't status=ok "
@@ -98,6 +120,9 @@ def main() -> int:
         for db in args.dbs:
             print("DRY " + " ".join(build_cmd(db, stages, args.skip_done,
                                               args.keep_going, args.stage_timeout,
+                                              args.stage_idle_timeout,
+                                              args.stage_progress_timeout,
+                                              args.stage_progress_interval,
                                               args.require_prereqs)),
                   flush=True)
         return 0
@@ -106,11 +131,17 @@ def main() -> int:
     if jobs == 1:
         for db in args.dbs:
             rcs.append(run_one(db, stages, args.skip_done, args.keep_going,
-                               args.stage_timeout, args.require_prereqs))
+                               args.stage_timeout, args.stage_idle_timeout,
+                               args.stage_progress_timeout,
+                               args.stage_progress_interval,
+                               args.require_prereqs))
     else:
         with ThreadPoolExecutor(max_workers=jobs) as ex:
             futs = [ex.submit(run_one, db, stages, args.skip_done, args.keep_going,
-                              args.stage_timeout, args.require_prereqs)
+                              args.stage_timeout, args.stage_idle_timeout,
+                              args.stage_progress_timeout,
+                              args.stage_progress_interval,
+                              args.require_prereqs)
                     for db in args.dbs]
             rcs = [f.result() for f in futs]
 
