@@ -2,45 +2,37 @@
 
 ## Current Objective
 
-Complete F4 durable queue/detached run tracking: replace pgrep-only active
-detection with SQLite-backed `supervised_runs` records.
+Complete F5 wallet cracking progress: update `crack_tasks` from hashcat status
+output, enforce a bounded cracker runtime, and preserve checkpoint/restore
+state.
 
 ## Completed Work
 
-- Added a `supervised_runs` table to `sql/analysis-schema.sql`.
-- Added `lib/supervised.py` for creating supervised rows, attaching PID/PGID,
-  updating heartbeat/progress, finishing rows, reconciling stale PIDs, encoding
-  child-runner env metadata, and requesting cancellation.
-- Web single-image pipeline launches now create a supervised row before
-  `Popen`, pass `SUPERVISED_RUNS` to `image-pipeline.py`, attach PID/PGID after
-  launch, and detect active runs from SQLite before falling back to legacy pgrep.
-- Web multi-image queue launches now create matching queue rows in each selected
-  image DB, pass all row IDs to `image-queue.py`, attach PID/PGID after launch,
-  and detect active queues from SQLite.
-- `image-pipeline.py` and `image-queue.py` update supervised heartbeat/progress
-  and final status from the child process.
-- Web startup reconciles stale `supervised_runs` rows alongside stale
-  `scan_runs`.
-- Added cancel buttons for active pipeline and queue runs; cancellation sets
-  `cancel_requested=1` and sends SIGTERM to the recorded process group.
-- Added `tests/unit/test_supervised.py` for create/attach/finish, env helpers,
-  reconciliation, and cancellation.
-- Marked F4 complete in `IMPROVEMENTS.md`.
+- Added `lib/crack_progress.py` to parse hashcat `Progress` and
+  `Time.Estimated` status lines and update `crack_tasks.progress_pct` /
+  `crack_tasks.eta_seconds` with parameterized SQLite writes.
+- `bin/image-crack-wallet.sh` now wraps hashcat output through the progress
+  parser while preserving pass-through logging.
+- Added `--max-runtime <seconds>` and `CRACK_WALLET_MAX_RUNTIME`, defaulting to
+  12 hours. Runtime expiry via `timeout` marks the crack task `paused` and keeps
+  the hashcat restore checkpoint path recorded.
+- CPU fallback cracking is also runtime-bounded when enabled, but detailed
+  progress parsing remains hashcat-only.
+- Added `tests/unit/test_crack_progress.py` for parser, ETA conversion, direct
+  DB updates, and stream flushing without requiring GPU/hashcat.
+- Marked F5 complete in `IMPROVEMENTS.md` and `TASKS.md`.
 
 ## Current Implementation State
 
-F4 is implemented and verified locally. The working tree still contains
+F5 is implemented and verified locally. The working tree still contains
 pre-existing untracked local metadata directories/files not touched by this
 change.
 
 ## Files Changed
 
-- `lib/supervised.py`
-- `sql/analysis-schema.sql`
-- `bin/image-serve.py`
-- `bin/image-pipeline.py`
-- `bin/image-queue.py`
-- `tests/unit/test_supervised.py`
+- `lib/crack_progress.py`
+- `bin/image-crack-wallet.sh`
+- `tests/unit/test_crack_progress.py`
 - `IMPROVEMENTS.md`
 - `PROJECT_STATE.md`
 - `TASKS.md`
@@ -48,26 +40,23 @@ change.
 
 ## Tests Run
 
-- `python3 -m py_compile lib/supervised.py bin/image-serve.py bin/image-pipeline.py bin/image-queue.py tests/unit/test_supervised.py` — passed.
-- `python3 -m unittest discover -s tests/unit -p 'test_supervised.py'` — passed, 3 tests.
-- `python3 -m unittest discover -s tests/unit -p 'test_queue_log.py'` — passed, 9 tests.
-- `python3 -m unittest discover -s tests/unit -p 'test_serve_queries.py'` — passed, 6 tests.
-- `./tests/run-unit.sh` — passed, 63 tests.
+- `python3 -m py_compile lib/crack_progress.py tests/unit/test_crack_progress.py` — passed.
+- `bash -n bin/image-crack-wallet.sh` — passed.
+- `python3 -m unittest discover -s tests/unit -p 'test_crack_progress.py'` — passed, 5 tests.
+- `./tests/run-unit.sh` — passed, 68 tests.
 
 ## Unresolved Defects Or Risks
 
-- Queue runs spanning multiple image DBs create one supervised row per selected
-  DB. Cancel sends SIGTERM once per row, so duplicate signals to the same PGID
-  are possible but harmless.
-- Legacy unmanaged queue/pipeline runs can still be detected by the old pgrep
-  fallback until no such older launches remain.
-- Supervised heartbeat is updated at runner boundaries; long-running per-stage
-  progress remains represented in `scan_runs` from F3.
+- `crack_tasks.progress_pct` and `eta_seconds` are populated only for hashcat,
+  because john CPU fallback does not emit the same status format.
+- Hashcat restore checkpoints are preserved by marking max-runtime exits as
+  `paused`; operators should resume with `--task-id <id>`.
 
 ## Known Blockers
 
-None for F4.
+None for F5.
 
 ## Next Recommended Action
 
-Start F5 `crack_tasks` progress updates for hashcat-based wallet cracking.
+Start F7 monitor stuckness: compare process CPU/IO samples and
+`scan_runs.last_progress_at` to show active, idle, no-output, or probably stuck.

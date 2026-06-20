@@ -16,6 +16,7 @@ Usage:
   image-crack-wallet.sh <db> [--wordlist <path>] [--rules <path>]
                              [--gpu | --cpu-fallback]
                              [--task-id <id>]
+                             [--max-runtime <seconds>]
                              [--run]
 
 Default is dry-run. Pass --run to execute cracking.
@@ -25,6 +26,7 @@ Behavior:
   - runs bitcoin2john.py to create a hash
   - runs hashcat -m 11300 when an NVIDIA GPU is present
   - refuses to run without GPU unless --cpu-fallback is explicit
+  - limits each cracker invocation with --max-runtime / CRACK_WALLET_MAX_RUNTIME
   - tracks queued/running/paused/cracked/exhausted/failed in crack_tasks
 
 Outputs:
@@ -51,6 +53,7 @@ wordlist="${WORDLIST_PATH:-$ROOT_DIR/config/wordlists/rockyou.txt}"
 rules_path=""
 cpu_fallback=0
 task_id=""
+max_runtime="${CRACK_WALLET_MAX_RUNTIME:-43200}"
 run=0
 if [[ "${db:-}" == "-h" || "${db:-}" == "--help" ]]; then
   usage
@@ -64,6 +67,7 @@ while [[ $# -gt 0 ]]; do
     --gpu) cpu_fallback=0; shift ;;
     --cpu-fallback) cpu_fallback=1; shift ;;
     --task-id) task_id="$2"; shift 2 ;;
+    --max-runtime) max_runtime="$2"; shift 2 ;;
     --run) run=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown argument: $1" ;;
@@ -72,6 +76,7 @@ done
 
 [[ -n "$db" ]] || { usage; exit 1; }
 [[ -f "$db" ]] || die "database not found: $db"
+[[ "$max_runtime" =~ ^[0-9]+$ ]] || die "--max-runtime must be an integer number of seconds"
 need_cmd python3
 need_cmd sqlite3
 
@@ -170,7 +175,11 @@ if [[ "$run" -ne 1 ]]; then
     if [[ "$cpu_fallback" -eq 1 ]]; then
       printf '  john --format=bitcoin --wordlist=%q --pot=%q %q\n' "$wordlist" "$out_dir/$label.john.pot" "$hash_file"
     else
-      printf '  hashcat -m 11300 --status --status-timer=60 --restore-file-path=%q %q %q\n' "$checkpoint_dir/restore" "$hash_file" "$wordlist"
+      if [[ "$max_runtime" -gt 0 ]]; then
+        printf '  timeout %q hashcat -m 11300 --status --status-timer=60 --restore-file-path=%q %q %q\n' "$max_runtime" "$checkpoint_dir/restore" "$hash_file" "$wordlist"
+      else
+        printf '  hashcat -m 11300 --status --status-timer=60 --restore-file-path=%q %q %q\n' "$checkpoint_dir/restore" "$hash_file" "$wordlist"
+      fi
     fi
   done < "$candidates_tsv"
   exit 0
@@ -194,6 +203,9 @@ if [[ "$cpu_fallback" -eq 1 ]]; then
 else
   require_nvidia_gpu >/dev/null
   need_cmd hashcat
+fi
+if [[ "$max_runtime" -gt 0 ]]; then
+  need_cmd timeout
 fi
 
 run_id="$(record_scan_start "$db" "crack-wallet" "$0 $db" "$log_path" "$out_dir")"
@@ -224,9 +236,22 @@ UPDATE crack_tasks
 SET status='$(sql_escape "$task_status")',
     result_value=CASE WHEN '$(sql_escape "$result")' = '' THEN result_value ELSE '$(sql_escape "$result")' END,
     ended_at=CASE WHEN '$(sql_escape "$task_status")' IN ('cracked','exhausted','failed') THEN '$(timestamp_utc)' ELSE ended_at END,
+    paused_at=CASE WHEN '$(sql_escape "$task_status")' = 'paused' THEN '$(timestamp_utc)' ELSE paused_at END,
     notes=CASE WHEN '$(sql_escape "$task_notes")' = '' THEN notes ELSE COALESCE(notes,'') || char(10) || '$(sql_escape "$task_notes")' END
 WHERE id=$id;
 SQL
+}
+
+run_hashcat_with_progress() {
+  local task="$1"
+  shift
+  local -a cmd=("$@")
+  local rc
+  set +e
+  "${cmd[@]}" 2>&1 | python3 "$ROOT_DIR/lib/crack_progress.py" "$db" "$task" --pass-through
+  rc=${PIPESTATUS[0]}
+  set -e
+  return "$rc"
 }
 
 extract_password() {
@@ -335,14 +360,22 @@ SQL
     crack_rc=0
     if [[ "$cpu_fallback" -eq 1 ]]; then
       pot_file="$out_dir/$task.john.pot"
-      john --format=bitcoin --wordlist="$wordlist" --pot="$pot_file" "$hash_file" || crack_rc=$?
+      if [[ "$max_runtime" -gt 0 ]]; then
+        timeout "$max_runtime" john --format=bitcoin --wordlist="$wordlist" --pot="$pot_file" "$hash_file" || crack_rc=$?
+      else
+        john --format=bitcoin --wordlist="$wordlist" --pot="$pot_file" "$hash_file" || crack_rc=$?
+      fi
       john --show --format=bitcoin --pot="$pot_file" "$hash_file" > "$show_file" 2>/dev/null || true
     else
       hashcat_args=(-m 11300 --status --status-timer=60 --restore-file-path="$current_checkpoint" "$hash_file" "$wordlist")
       if [[ -n "$rules_path" ]]; then
         hashcat_args+=(-r "$rules_path")
       fi
-      hashcat "${hashcat_args[@]}" || crack_rc=$?
+      if [[ "$max_runtime" -gt 0 ]]; then
+        run_hashcat_with_progress "$task" timeout "$max_runtime" hashcat "${hashcat_args[@]}" || crack_rc=$?
+      else
+        run_hashcat_with_progress "$task" hashcat "${hashcat_args[@]}" || crack_rc=$?
+      fi
       hashcat -m 11300 --show "$hash_file" > "$show_file" 2>/dev/null || true
     fi
 
@@ -354,6 +387,10 @@ SQL
       fi
       import_cracked_password "$task" "$artifact_id" "$wallet_path" "$password" "$dump_after_crack"
       printf 'Task %s cracked.\n' "$task"
+    elif [[ "$crack_rc" -eq 124 || "$crack_rc" -eq 137 || "$crack_rc" -eq 143 ]]; then
+      update_task_status "$task" "paused" "" "cracker max runtime reached or terminated; checkpoint preserved at $current_checkpoint"
+      status="partial"
+      printf 'Task %s paused at checkpoint %s.\n' "$task" "$current_checkpoint"
     elif [[ "$crack_rc" -eq 0 || "$crack_rc" -eq 1 ]]; then
       update_task_status "$task" "exhausted" "" "wordlist exhausted without crack"
       printf 'Task %s exhausted.\n' "$task"

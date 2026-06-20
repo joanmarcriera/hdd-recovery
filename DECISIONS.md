@@ -1,5 +1,40 @@
 # Decisions
 
+## 2026-06-20 — Hashcat Runtime Expiry Pauses Crack Tasks
+
+**Decision:** F5 treats a wallet-cracking runtime expiry as a paused crack task,
+not as a failed task. `image-crack-wallet.sh` runs hashcat with `--status` and a
+per-task restore path, streams status output through `lib/crack_progress.py`,
+and uses `--max-runtime` / `CRACK_WALLET_MAX_RUNTIME` to bound each cracker
+invocation. When `timeout` or termination returns `124`, `137`, or `143`, the
+task status becomes `paused` and the checkpoint path remains recorded for a
+later `--task-id` resume.
+
+**Alternatives considered:**
+
+- Let hashcat run until the existing global stage wall timeout.
+- Mark timeout as `failed`.
+- Parse progress only from log files after the command exits.
+
+**Rationale:** Wallet cracking can legitimately run for many hours, so a bounded
+slice needs to stop cleanly without losing restore state. A timeout is not
+evidence that the candidate is bad; it only means the current run exhausted its
+allocated runtime. Streaming parser updates keep `crack_tasks.progress_pct` and
+`eta_seconds` useful during the run without requiring GPU/hashcat in unit tests.
+
+**Consequences:**
+
+- Operators resume bounded cracking with `--task-id <id>`.
+- Hashcat tasks expose progress and ETA in SQLite during the run.
+- John CPU fallback is runtime-bounded but does not get parsed progress because
+  it does not emit hashcat-compatible status lines.
+
+**Revisit if:**
+
+- A future wrapper can safely extract progress from john or btcrecover output.
+- Operators want per-task runtime budgets stored in `crack_tasks` rather than
+  supplied per invocation.
+
 ## 2026-06-20 — Detached Web Runs Are Tracked Per Image DB
 
 **Decision:** F4 stores detached web-launched pipeline and queue jobs in a new

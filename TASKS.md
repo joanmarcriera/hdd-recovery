@@ -30,13 +30,19 @@
     web queue or detached pipeline jobs launch; replace pgrep-only queue
     detection; reconcile stale rows at startup; add focused unit tests.
 
-## Next
-
-- [ ] F5 maintain `crack_tasks` progress.
+- [x] F5 maintain `crack_tasks` progress.
   - Completion criteria: parse hashcat status output into
     `crack_tasks.progress_pct` and `crack_tasks.eta_seconds`; enforce a maximum
     runtime; preserve checkpoint/restore behavior; add focused tests without
     requiring GPU/hashcat.
+
+## Next
+
+- [ ] F7 stuckness in the monitor.
+  - Completion criteria: compare current vs prior activity using CPU/IO samples
+    and `scan_runs.last_progress_at`; show active, idle, no-output, or probably
+    stuck with the source of the judgment; add focused tests without touching
+    source media.
 
 - [ ] #18 split `bin/image-serve.py`.
   - Completion criteria: extract cohesive route/page/db/util modules behind a

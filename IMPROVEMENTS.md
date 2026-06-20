@@ -410,10 +410,15 @@ durable, **progress-aware** run supervisor. Eight findings (F1–F8).
   launch, and expose cancel buttons. `image-pipeline.py`, `image-queue.py`, and
   web startup update/reconcile those rows. Tests in
   `tests/unit/test_supervised.py`.
+- **F5 — Maintain `crack_tasks` progress.** Added `lib/crack_progress.py` to
+  parse hashcat `Progress` / `Time.Estimated` status lines into
+  `crack_tasks.progress_pct` and `crack_tasks.eta_seconds`. `image-crack-wallet.sh`
+  now pipes hashcat output through that parser, enforces `--max-runtime` /
+  `CRACK_WALLET_MAX_RUNTIME` (default 12h), and marks timeout/termination as
+  `paused` while preserving the restore checkpoint path. Tests in
+  `tests/unit/test_crack_progress.py`.
 
 ### Pending (bigger, build on F2's durable columns)
 
-- **F5 — Maintain `crack_tasks` progress.** Parse `hashcat --status` into
-  `progress_pct`/`eta_seconds`; enforce max runtime; preserve checkpoint/restore.
 - **F7 — Stuckness in the monitor.** Compare current vs prior activity; show
   active / idle Nm / no output Nh / probably stuck, with the source of the call.
