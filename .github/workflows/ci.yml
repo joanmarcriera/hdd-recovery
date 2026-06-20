@@ -1,0 +1,46 @@
+name: CI
+
+# Fast, dependency-free gate: shell syntax, shellcheck (errors only), Python
+# byte-compile, and the offline unit suite. Heavy fixture-based forensic checks
+# (tests/smoke/) are intentionally not run here — they need owner-provided
+# disk-image fixtures.
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest   # ships bash, shellcheck, python3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Shell syntax (bash -n)
+        run: |
+          set -euo pipefail
+          mapfile -d '' files < <(find bin lib tests docker -name '*.sh' -print0)
+          for f in "${files[@]}"; do bash -n "$f"; done
+          echo "checked ${#files[@]} shell scripts"
+
+      - name: ShellCheck (errors only)
+        run: |
+          set -euo pipefail
+          shellcheck --version
+          find bin lib tests docker -name '*.sh' -print0 \
+            | xargs -0 shellcheck --severity=error --external-sources
+
+      - name: Python byte-compile
+        run: |
+          set -euo pipefail
+          find bin tui tests -name '*.py' -not -path '*/__pycache__/*' -print0 \
+            | xargs -0 -n1 python3 -m py_compile
+          echo "compiled python sources"
+
+      - name: Unit tests
+        run: ./tests/run-unit.sh
