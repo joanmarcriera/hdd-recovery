@@ -70,10 +70,14 @@
 
 ## Next
 
-- [ ] #18 split `bin/image-serve.py`.
+- [ ] #18 split `bin/image-serve.py`. (in progress — 2026-06-20)
   - Completion criteria: extract cohesive route/page/db/util modules behind a
     thin entrypoint; keep the public routes unchanged; add or preserve focused
     unit coverage after each extraction; keep `./tests/run-unit.sh` green.
+  - Progress: `lib/serve_auth.py` + `lib/serve_mapfile.py` extracted (with new
+    `test_serve_mapfile.py`); entrypoint re-imports them, suite green.
+  - Remaining: page_* renderers, db/util helpers, and the request Handler.
+    Best done where the running server can be exercised end-to-end.
 
 ## Backlog
 
