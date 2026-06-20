@@ -105,6 +105,20 @@ class TestStageRegistry(unittest.TestCase):
         # Slow OCR must stay opt-in — not run automatically on every image.
         self.assertNotIn("ocr-seed-scan", pl.PRESETS["full"])
 
+    def test_detect_encrypted_registered_and_eligible(self):
+        s = pl.stage_index().get("detect-encrypted")
+        self.assertIsNotNone(s, "detect-encrypted stage not registered")
+        ok, reason = pl.is_eligible(s)
+        self.assertTrue(ok, f"detect-encrypted not eligible: {reason}")
+        self.assertEqual(s.script, "image-detect-encrypted-containers.sh")
+        self.assertEqual(s.scan_run_key, "detect-encrypted")
+
+    def test_detect_encrypted_in_full_and_wallet_presets(self):
+        # Encrypted-container leads are cheap and high-value, so unlike OCR they
+        # run as part of the standard sweeps.
+        self.assertIn("detect-encrypted", pl.PRESETS["full"])
+        self.assertIn("detect-encrypted", pl.PRESETS["wallet"])
+
 
 class TestPrereqs(unittest.TestCase):
     """F6 — requires_prior enforcement (skip stages with missing inputs)."""
