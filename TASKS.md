@@ -88,5 +88,8 @@
   - `/gallery` "Group duplicates" toggle (collapse to cluster primary + size
     badge); `/pictures` carved table Cluster column. Tests in
     `tests/unit/test_serve_queries.py`.
-- [ ] #13 dynamic device blocking in the wizard.
+- [x] #13 dynamic device blocking in the wizard. (2026-06-20)
+  - `tui/devices.py` derives blocked disks (mounted / ZFS member / destination)
+    at runtime via `detect_blocked_devices()`; wizard falls back to `{sda,sdb,
+    sdc}` only if detection is empty. Tests in `test_monitor_devices.py`.
 - [ ] #16 replication reliability improvements.

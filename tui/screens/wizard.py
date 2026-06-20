@@ -18,9 +18,11 @@ from textual.screen import Screen
 from textual.widgets import Button, Footer, Header, Input, Label, ListItem, ListView, Static
 
 from config import JOBS_DIR
+from devices import detect_blocked_devices
 
-# Devices that must never be selected as source
-_BLOCKED = {"sda", "sdb", "sdc"}
+# Fallback if runtime detection yields nothing (e.g. /proc/mounts unreadable):
+# the historical dev-machine layout. Real blocking is derived at runtime.
+_BLOCKED_FALLBACK = {"sda", "sdb", "sdc"}
 
 
 @dataclass
@@ -139,6 +141,12 @@ class WizardScreen(Screen):
         super().__init__()
         self._devs: list[BlockDev] = []
         self._selected: Optional[BlockDev] = None
+        # Derive blocked disks at runtime (mounted / ZFS member / destination);
+        # fall back to the historical layout only if detection finds nothing.
+        try:
+            self._blocked = detect_blocked_devices() or set(_BLOCKED_FALLBACK)
+        except Exception:
+            self._blocked = set(_BLOCKED_FALLBACK)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -168,7 +176,7 @@ class WizardScreen(Screen):
             lv.append(ListItem(Label("[dim]No block devices found.[/dim]")))
             return
         for dev in self._devs:
-            blocked = dev.name in _BLOCKED
+            blocked = dev.name in self._blocked
             mark = " [bold red]BLOCKED[/bold red]" if blocked else ""
             label = f"[cyan]/dev/{dev.name}[/cyan]  {dev.size_human}  {escape(dev.model or '(no model)')}  serial={escape(dev.serial or '?')}{mark}"
             lv.append(ListItem(Label(label)))
@@ -180,7 +188,7 @@ class WizardScreen(Screen):
         dev = self._devs[idx]
         self._selected = dev
 
-        blocked = dev.name in _BLOCKED
+        blocked = dev.name in self._blocked
         warn = self.query_one("#blocked-warn", Static)
         if blocked:
             warn.update(

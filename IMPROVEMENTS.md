@@ -171,7 +171,15 @@ When a stage is pending because prerequisites are not done, the TUI shows `pendi
 
 ---
 
-### 13. Wizard hardcodes blocked device set
+### 13. Wizard hardcodes blocked device set — DONE (2026-06-20)
+
+> `tui/devices.py` gained pure, tested helpers `mounted_whole_disks()`,
+> `zfs_member_disks()`, and `blocked_devices()` plus a `detect_blocked_devices()`
+> runtime wrapper (reads /proc/mounts + `zpool status`, adds the destination
+> disk). The wizard derives its blocked set at init and only falls back to the
+> old `{sda,sdb,sdc}` if detection yields nothing. Tests in
+> `tests/unit/test_monitor_devices.py`.
+
 
 `tui/screens/wizard.py` has `_BLOCKED = {"sda", "sdb", "sdc"}` — this assumes a specific hardware layout. The `/dev/sdb` ZFS member assumption is specific to the dev machine and will block valid target disks on other setups.
 
