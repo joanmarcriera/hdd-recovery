@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import time
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +14,12 @@ from textual.screen import Screen
 from textual.widgets import Footer, Header, Label, RichLog
 
 from executor import build_command, launch, launch_cmd
+from lib.watchdog import (
+    DEFAULT_IDLE_TIMEOUT,
+    DEFAULT_STAGE_TIMEOUT,
+    stream_process,
+    timeout_from_env,
+)
 from stages import StageDef
 from state import DiskInfo
 
@@ -63,7 +68,6 @@ class LogViewerScreen(Screen):
         self.cmd_override = cmd_override  # if set, run this instead of build_command()
         self._process: Optional[asyncio.subprocess.Process] = None
         self._done = False
-        self._start_time = time.monotonic()
 
     def compose(self) -> ComposeResult:
         title = "Log viewer" if self.log_path else f"Running: {self.stage.name}"
@@ -130,42 +134,77 @@ class LogViewerScreen(Screen):
             return
 
         pid = self._process.pid
-        status_label.update(f"[cyan]Running PID {pid}… (B/Q to go back — process continues in background)[/cyan]")
+        wall_timeout = timeout_from_env("STAGE_TIMEOUT", DEFAULT_STAGE_TIMEOUT)
+        idle_timeout = timeout_from_env("STAGE_IDLE_TIMEOUT", DEFAULT_IDLE_TIMEOUT)
+        limits = []
+        if wall_timeout > 0:
+            limits.append(f"wall {wall_timeout}s")
+        if idle_timeout > 0:
+            limits.append(f"idle {idle_timeout}s")
+        limit_text = ", ".join(limits) if limits else "timeouts disabled"
+        status_label.update(
+            f"[cyan]Running PID {pid} ({escape(limit_text)})… "
+            "(B/Q to go back — process continues in background)[/cyan]"
+        )
 
-        # Stream output; catch CancelledError (screen popped) and drain pipe
-        # in background so the subprocess never blocks on a full pipe buffer.
-        assert self._process.stdout is not None
+        def write_output(text: str) -> None:
+            lines = text.splitlines()
+            if not lines and text:
+                log.write("")
+                return
+            for line in lines:
+                log.write(escape(line))
+
+        def write_event(message: str) -> None:
+            log.write(f"[yellow]{escape(message)}[/yellow]")
+
+        # Stream output; catch CancelledError (screen popped) and keep a
+        # detached watchdog draining the pipe so the subprocess never blocks.
         try:
-            async for raw in self._process.stdout:
-                line = raw.decode("utf-8", errors="replace").rstrip()
-                log.write(line)
+            result = await stream_process(
+                self._process,
+                wall_timeout=wall_timeout,
+                idle_timeout=idle_timeout,
+                on_output=write_output,
+                log_event=write_event,
+            )
         except asyncio.CancelledError:
-            asyncio.ensure_future(self._drain_stdout())
+            if self._process and self._process.returncode is None:
+                asyncio.ensure_future(
+                    self._supervise_detached(wall_timeout, idle_timeout)
+                )
             raise
 
-        await self._process.wait()
-        rc = self._process.returncode
-        elapsed = time.monotonic() - self._start_time
+        rc = result.rc
+        elapsed = result.elapsed
 
         if rc == 0:
             log.write(f"\n[green]✓ Finished successfully  (exit 0, {elapsed:.0f}s)[/green]")
             status_label.update(f"[green]Done in {elapsed:.0f}s — B to go back[/green]")
+        elif result.timed_out:
+            label = "Idle timeout" if result.timeout_kind == "idle" else "Wall timeout"
+            log.write(
+                f"\n[bold red]✗ {escape(label)} "
+                f"(exit {rc}, {elapsed:.0f}s)[/bold red]"
+            )
+            status_label.update(f"[red]{escape(label)} — B to go back[/red]")
         else:
             log.write(f"\n[red]✗ Exited with code {rc}  ({elapsed:.0f}s)[/red]")
             status_label.update(f"[red]Exit code {rc} — B to go back[/red]")
 
         self._done = True
 
-    async def _drain_stdout(self) -> None:
-        """Drain subprocess stdout after detaching so the process never blocks on a full pipe."""
+    async def _supervise_detached(self, wall_timeout: int, idle_timeout: int) -> None:
+        """Keep supervising a process after the log screen is popped."""
         try:
-            stdout = self._process.stdout if self._process else None
-            if stdout is None:
+            process = self._process
+            if process is None or process.returncode is not None:
                 return
-            while not stdout.at_eof():
-                chunk = await stdout.read(8192)
-                if not chunk:
-                    break
+            await stream_process(
+                process,
+                wall_timeout=wall_timeout,
+                idle_timeout=idle_timeout,
+            )
         except Exception:
             pass
 
@@ -175,7 +214,8 @@ class LogViewerScreen(Screen):
             # _drain_stdout is scheduled via CancelledError handler in _run_stage.
             self.app.notify(
                 "Stage is still running in the background. "
-                "Use T (Tail active log) from the checklist to re-attach.",
+                "The watchdog remains active; use T (Tail active log) from "
+                "the checklist to re-attach.",
                 severity="information",
                 timeout=8,
             )

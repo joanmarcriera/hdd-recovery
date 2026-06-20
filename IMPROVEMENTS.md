@@ -385,12 +385,17 @@ durable, **progress-aware** run supervisor. Eight findings (F1–F8).
   `tui/devices.py` derives the destination disk from `$MONITOR_DEST_DEV` / the
   mount backing the image-export root (ZFS-aware), falling back to `sdc`. Tests
   in `tests/unit/test_monitor_devices.py`.
+- **F1 — Shared watchdog runner.** `lib/watchdog.py` now owns async process
+  streaming, wall timeout, idle-output timeout, and SIGTERM -> SIGKILL
+  process-group cleanup. `bin/image-pipeline.py` uses the sync wrapper so
+  `run_command()` keeps rc=124 timeout semantics; `tui/executor.py` launches
+  commands with `start_new_session=True`; `tui/screens/log_viewer.py` surfaces
+  wall/idle timeout results and keeps a detached watchdog active after leaving
+  the live log screen. Tests in `tests/unit/test_watchdog.py` and
+  `tests/unit/test_pipeline.py`.
 
 ### Pending (bigger, build on F2's durable columns)
 
-- **F1 — Shared watchdog runner.** Route the TUI launch path
-  (`tui/executor.py`) and web launches through one runner with wall + idle
-  timeout and process-group kill (CLI pipeline already has the wall-timeout half).
 - **F3 — Useful-progress probes + idle timeout.** Per-stage probes (ddrescue
   rescued bytes, log mtime, output-dir size, artifact count, queue-marker age, DB
   row count); kill/pause after "no useful progress for N min" (`last_progress_at`

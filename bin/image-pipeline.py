@@ -25,11 +25,8 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
-import signal
 import sqlite3
-import subprocess
 import sys
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -37,6 +34,11 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tui.stages import STAGES  # noqa: E402
 from lib.runs import reconcile_running  # noqa: E402
+from lib.watchdog import (  # noqa: E402
+    DEFAULT_STAGE_TIMEOUT,
+    TIMEOUT_RC,
+    run_command_sync,
+)
 
 ACQUISITION_PREFIXES = ("ddrescue-", "safecopy-")
 CRACKING_KEYS = {"crack-wallet", "crack-keepass", "btcrecover"}
@@ -45,10 +47,6 @@ CRACKING_KEYS = {"crack-wallet", "crack-keepass", "btcrecover"}
 # --scope recovered finalization spin noted in CLAUDE.md) can never stall the
 # whole image / queue forever. Generous by default; override per run with
 # --stage-timeout or the STAGE_TIMEOUT env var (seconds; 0 disables).
-DEFAULT_STAGE_TIMEOUT = 43200  # 12h
-TIMEOUT_RC = 124               # matches coreutils `timeout`
-KILL_GRACE_S = 10              # SIGTERM → SIGKILL grace for the stage group
-
 PRESETS: dict[str, list[str]] = {
     "fast":      ["structure-scan", "index-tsk", "detect-wallets", "detect-pictures"],
     "carve":     ["carve-foremost", "carve-scalpel"],
@@ -205,44 +203,29 @@ def resolve_args(stage, ctx: dict[str, str]) -> list[str]:
     return out
 
 
-def _terminate_group(proc: subprocess.Popen) -> None:
-    """SIGTERM the stage's process group, escalating to SIGKILL after a grace
-    period. The stage runs in its own session so children die with it instead
-    of being orphaned (the previous subprocess.call left them running on kill)."""
-    try:
-        pgid = os.getpgid(proc.pid)
-    except ProcessLookupError:
-        return
-    for sig, wait_s in ((signal.SIGTERM, KILL_GRACE_S), (signal.SIGKILL, 5)):
-        try:
-            os.killpg(pgid, sig)
-        except ProcessLookupError:
-            return
-        try:
-            proc.wait(timeout=wait_s)
-            return
-        except subprocess.TimeoutExpired:
-            continue
-
-
 def run_command(cmd: list[str], env: dict[str, str], timeout: int,
                 fh=None) -> tuple[int, float]:
     """Run cmd to completion, returning (rc, elapsed_seconds). A positive
     timeout kills the whole process group and returns TIMEOUT_RC. Testable in
     isolation (no stage/db objects required)."""
-    t0 = time.time()
-    proc = subprocess.Popen(cmd, env=env, start_new_session=True)
+    def emit_output(text: str) -> None:
+        print(text, end="", flush=True)
+        if fh:
+            fh.write(text)
+            fh.flush()
+
     try:
-        rc = proc.wait(timeout=timeout if timeout and timeout > 0 else None)
-    except subprocess.TimeoutExpired:
-        log(f"  TIMEOUT after {timeout}s — terminating stage process group", fh)
-        _terminate_group(proc)
-        return TIMEOUT_RC, time.time() - t0
+        result = run_command_sync(
+            cmd,
+            env=env,
+            wall_timeout=timeout,
+            on_output=emit_output,
+            log_event=lambda msg: log(msg, fh),
+        )
     except KeyboardInterrupt:
-        log("  INTERRUPTED at user request — terminating stage process group", fh)
-        _terminate_group(proc)
+        log("  INTERRUPTED at user request - terminating stage process group", fh)
         raise
-    return rc, time.time() - t0
+    return result.rc, result.elapsed
 
 
 def run_stage(stage, ctx: dict[str, str], do_run: bool, fh,

@@ -3,8 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import shlex
+import sys
 from pathlib import Path
 from typing import Optional
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from config import BIN_DIR
 from stages import StageDef
@@ -60,6 +65,7 @@ async def launch(
         stdin=stdin_mode,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
     )
 
     if stage.auto_stdin and process.stdin:
@@ -77,6 +83,7 @@ async def launch_cmd(cmd: list[str]) -> asyncio.subprocess.Process:
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
+        start_new_session=True,
     )
 
 
