@@ -29,7 +29,7 @@ A self-contained Docker container for hard-disk image forensics, focused on reco
    - `/mnt/BigDisk/CryptoBackup/exports` → `/data/exports`
    - `/mnt/BigDisk/CryptoBackup/logs` → `/data/logs`
 5. Add one port forward: host `7788` → container `7788`
-6. Click **Install**, then open `http://truenas-ip:7788/` for the review UI or `http://truenas-ip:7788/terminal/` for the TUI
+6. Click **Install**, then open `http://truenas-ip:7788/` for the review UI or `http://truenas-ip:7788/terminal/` for the TUI. The review UI reuses `TTYD_USER`/`TTYD_PASSWORD` unless `WEBUI_USER`/`WEBUI_PASSWORD` are set separately.
 
 ## Quick start — docker run
 
@@ -56,8 +56,10 @@ docker run -d \
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `TTYD_PASSWORD` | **yes** | — | Password for the browser terminal |
-| `TTYD_USER` | no | `admin` | Username for the browser terminal |
+| `TTYD_PASSWORD` | **yes** | — | Password for the browser terminal and, by default, the review UI |
+| `TTYD_USER` | no | `admin` | Username for the browser terminal and, by default, the review UI |
+| `WEBUI_PASSWORD` | no | `TTYD_PASSWORD` | Optional separate HTTP Basic auth password for the review UI |
+| `WEBUI_USER` | no | `TTYD_USER` | Optional separate HTTP Basic auth username for the review UI |
 | `IMAGE_ROOT` | no | `/data/images` | Raw ddrescue image path |
 | `DB_ROOT` | no | `/data/db` | SQLite database path |
 | `EXPORT_ROOT` | no | `/data/exports` | Recovered outputs path |

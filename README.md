@@ -79,7 +79,7 @@ The imaging machine does one thing: run `ddrescue` to capture a raw image, then 
 5. Under **Networking**, add one port forward:
    - Container port `7788` → Host port `7788`
 
-6. Click **Install**. After about a minute, open `http://truenas-ip:7788/` for the review UI or `http://truenas-ip:7788/terminal/` for the TUI terminal. Log in to the terminal with username `admin` and the password you set.
+6. Click **Install**. After about a minute, open `http://truenas-ip:7788/` for the review UI or `http://truenas-ip:7788/terminal/` for the TUI terminal. Log in with username `admin` and the password you set.
 
 Use `GET /health` on the same mapped UI port for the TrueNAS health probe.
 
@@ -96,7 +96,7 @@ docker compose --env-file .env pull
 docker compose --env-file .env up -d
 ```
 
-Then open `http://truenas-ip:7788/` for the review UI or `http://truenas-ip:7788/terminal/` for the terminal TUI.
+Then open `http://truenas-ip:7788/` for the review UI or `http://truenas-ip:7788/terminal/` for the terminal TUI. The review UI reuses `TTYD_USER`/`TTYD_PASSWORD` unless `WEBUI_USER`/`WEBUI_PASSWORD` are set separately.
 
 ### Option C — docker run (one-liner)
 
@@ -211,8 +211,10 @@ Always run the metadata-first path (TSK index → wallet/picture detection) befo
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `TTYD_PASSWORD` | **yes** | — | Password for the browser terminal |
-| `TTYD_USER` | no | `admin` | Username for the browser terminal |
+| `TTYD_PASSWORD` | **yes** | — | Password for the browser terminal and, by default, the review UI |
+| `TTYD_USER` | no | `admin` | Username for the browser terminal and, by default, the review UI |
+| `WEBUI_PASSWORD` | no | `TTYD_PASSWORD` | Optional separate HTTP Basic auth password for the review UI |
+| `WEBUI_USER` | no | `TTYD_USER` | Optional separate HTTP Basic auth username for the review UI |
 | `UI_PORT` | no | `7788` | Host-side UI port in docker compose |
 | `TTYD_INTERNAL_PORT` | no | `17681` | Internal localhost-only ttyd port used behind `/terminal/` |
 | `TTYD_CMD` | no | `cd /root/hdd-recovery && exec bin/tui.sh` | Command the terminal runs on each new connection |
@@ -358,8 +360,8 @@ For `disk.img`, the default SQLite path is `/data/db/disk.img.analysis.sqlite`. 
 
 ## Security notes
 
-- The browser terminal under `/terminal/` requires a password set via `TTYD_PASSWORD`. Use a strong password even on a LAN.
-- Treat the unified UI as LAN-only. If you expose it beyond the LAN, put a real reverse proxy with TLS and authentication in front of port `7788`.
+- The browser terminal under `/terminal/` requires a password set via `TTYD_PASSWORD`. The review UI also requires HTTP Basic auth when `TTYD_PASSWORD` or `WEBUI_PASSWORD` is set. Use strong credentials even on a LAN.
+- Treat the unified UI as LAN-only. If you expose it beyond the LAN, put a real reverse proxy with TLS in front of port `7788`.
 - The container does not require `--privileged` or any special Linux capabilities. It reads image files exclusively via the volume mount.
 - `/health` and `/status` are unauthenticated and intended for LAN health probes.
 

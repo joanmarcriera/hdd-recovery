@@ -281,8 +281,10 @@ Add each variable using the **Add** button under Environment Variables.
 
 | Name | Value | Notes |
 |------|-------|-------|
-| `TTYD_PASSWORD` | your chosen password | **Required.** Container refuses to start without it. |
-| `TTYD_USER` | `admin` | Username for the browser terminal auth dialog. |
+| `TTYD_PASSWORD` | your chosen password | **Required.** Container refuses to start without it. Also protects the review UI unless `WEBUI_PASSWORD` is set. |
+| `TTYD_USER` | `admin` | Username for the browser terminal and, by default, review UI auth dialogs. |
+| `WEBUI_PASSWORD` | optional | Optional separate review UI HTTP Basic auth password. |
+| `WEBUI_USER` | optional | Optional separate review UI HTTP Basic auth username. |
 | `OLLAMA_HOST` | `http://host-gateway:11434` | Primary remote Ollama URL. If `host-gateway` does not resolve, use the LAN IP: `http://192.168.x.x:11434`. |
 | `OLLAMA_HOSTS` | optional | Comma-separated Ollama URLs for parallel image tagging. |
 | `IMAGE_ROOT` | `/data/images` | Raw ddrescue images. |
@@ -331,7 +333,7 @@ Open the browser terminal:
 http://<truenas-ip>:7788/terminal/
 ```
 
-Log in with username `admin` (or whatever you set `TTYD_USER` to) and the `TTYD_PASSWORD` you configured. The terminal starts the TUI by default; change `TTYD_CMD` to `bash` if you want a plain shell.
+Log in with username `admin` (or whatever you set `TTYD_USER` to) and the `TTYD_PASSWORD` you configured. The review UI reuses those credentials unless you set `WEBUI_USER`/`WEBUI_PASSWORD`. The terminal starts the TUI by default; change `TTYD_CMD` to `bash` if you want a plain shell.
 
 ---
 
@@ -367,8 +369,10 @@ The compose file expects the `.env` file to live at `docker/.env`. Run all `dock
 
 | Name | Default | Required | Description |
 |------|---------|----------|-------------|
-| `TTYD_PASSWORD` | — | **Yes** | Password for the browser terminal. The supervisor exits immediately if this is unset. |
-| `TTYD_USER` | `admin` | No | Username shown in the browser auth dialog. |
+| `TTYD_PASSWORD` | — | **Yes** | Password for the browser terminal and, by default, the review UI. The supervisor exits immediately if this is unset. |
+| `TTYD_USER` | `admin` | No | Username shown in the browser auth dialogs. |
+| `WEBUI_PASSWORD` | `TTYD_PASSWORD` | No | Optional separate HTTP Basic auth password for the review UI. |
+| `WEBUI_USER` | `TTYD_USER` | No | Optional separate HTTP Basic auth username for the review UI. |
 | `UI_PORT` | `7788` | No | Host-side unified UI port used by docker compose. |
 | `TTYD_INTERNAL_PORT` | `17681` | No | Internal localhost-only ttyd backend port. |
 | `TTYD_CMD` | `cd /root/hdd-recovery && exec bin/tui.sh` | No | Shell command each terminal session runs. Set to `bash` for a plain shell. |

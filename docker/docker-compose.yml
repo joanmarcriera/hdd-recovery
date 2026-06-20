@@ -14,11 +14,17 @@ services:
       - "${UI_PORT:-7788}:7788"
 
     environment:
-      # REQUIRED: password for the browser terminal
+      # REQUIRED: password for the browser terminal.
+      # The review UI reuses this unless WEBUI_PASSWORD is set below.
       TTYD_PASSWORD: "${TTYD_PASSWORD:?TTYD_PASSWORD is required}"
 
       # Username for the browser terminal (default: admin)
       TTYD_USER: "${TTYD_USER:-admin}"
+
+      # Optional separate HTTP Basic auth credentials for the review UI.
+      # Leave blank to reuse TTYD_USER/TTYD_PASSWORD.
+      WEBUI_PASSWORD: "${WEBUI_PASSWORD:-}"
+      WEBUI_USER: "${WEBUI_USER:-}"
 
       # Command the terminal runs on each connection.
       # Default launches the TUI. Change to 'bash' for a plain shell.
