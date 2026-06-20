@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import shlex
+from functools import partial
 
 from rich.markup import escape
 from textual.app import ComposeResult
@@ -12,6 +13,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Input, Label, Select, Static
 
 from config import BIN_DIR
+from ollama import HostStatus, any_reachable, probe_hosts
 from stages import StageDef
 from state import DiskInfo
 
@@ -26,6 +28,7 @@ class TagPhotosScreen(ModalScreen[list[str] | None]):
     BINDINGS = [
         Binding("y",      "confirm", "Run"),
         Binding("n",      "cancel",  "Cancel"),
+        Binding("c",      "check",   "Check hosts"),
         Binding("escape", "cancel",  "Cancel"),
     ]
 
@@ -79,6 +82,7 @@ class TagPhotosScreen(ModalScreen[list[str] | None]):
             with Horizontal(classes="row"):
                 yield Label("Ollama URLs", classes="lbl")
                 yield Input(value=_DEFAULT_OLLAMA, id="ollama")
+            yield Static("", id="ollama-status")
             with Horizontal(classes="row"):
                 yield Label("Workers", classes="lbl")
                 yield Input(value="", placeholder="auto", id="workers")
@@ -101,10 +105,43 @@ class TagPhotosScreen(ModalScreen[list[str] | None]):
 
             with Center(id="buttons"):
                 yield Button("Run  [Y]", variant="success", id="btn-run")
+                yield Button("Check  [C]", variant="primary", id="btn-check")
                 yield Button("Cancel  [N]", variant="default", id="btn-cancel")
 
     def on_mount(self) -> None:
+        # Latest probe result; empty until the first probe completes. The run
+        # gate only blocks when a completed probe shows every host down, so a
+        # slow/failed probe never permanently locks the operator out.
+        self._statuses: list[HostStatus] = []
         self._refresh_cmd()
+        self.action_check()
+
+    def action_check(self) -> None:
+        raw = self.query_one("#ollama", Input).value.strip()
+        status = self.query_one("#ollama-status", Static)
+        if not raw:
+            self._statuses = []
+            status.update("[dim]enter an Ollama URL to check[/dim]")
+            return
+        status.update("[dim]checking Ollama hosts…[/dim]")
+        # Network I/O off the UI thread; results applied back on the UI thread.
+        self.run_worker(partial(self._probe_blocking, raw),
+                        thread=True, exclusive=True, group="ollama-probe")
+
+    def _probe_blocking(self, raw: str) -> None:
+        statuses = probe_hosts(raw)
+        self.app.call_from_thread(self._show_statuses, statuses)
+
+    def _show_statuses(self, statuses: list[HostStatus]) -> None:
+        self._statuses = statuses
+        parts = []
+        for s in statuses:
+            if s.ok:
+                parts.append(f"[green]✓ {escape(s.url)} ({escape(s.detail)})[/green]")
+            else:
+                parts.append(f"[red]✗ {escape(s.url)} ({escape(s.detail)})[/red]")
+        self.query_one("#ollama-status", Static).update(
+            "  ".join(parts) if parts else "[red]no Ollama hosts configured[/red]")
 
     def _build_cmd(self) -> list[str]:
         db = str(self.disk.db_path)
@@ -136,8 +173,13 @@ class TagPhotosScreen(ModalScreen[list[str] | None]):
             f"[dim on default]{escape(shlex.join(cmd))}[/dim on default]"
         )
 
-    def on_input_changed(self, _event: Input.Changed) -> None:
+    def on_input_changed(self, event: Input.Changed) -> None:
         self._refresh_cmd()
+        if event.input.id == "ollama":
+            # URL edited — prior probe result is stale; require a re-check.
+            self._statuses = []
+            self.query_one("#ollama-status", Static).update(
+                "[dim]press C to check host availability[/dim]")
 
     def on_select_changed(self, _event: Select.Changed) -> None:
         self._refresh_cmd()
@@ -148,6 +190,8 @@ class TagPhotosScreen(ModalScreen[list[str] | None]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-run":
             self.action_confirm()
+        elif event.button.id == "btn-check":
+            self.action_check()
         else:
             self.action_cancel()
 
@@ -155,6 +199,13 @@ class TagPhotosScreen(ModalScreen[list[str] | None]):
         ollama = self.query_one("#ollama", Input).value.strip()
         if not ollama:
             self.app.notify("Ollama URL is required.", severity="error")
+            return
+        # Block only when a completed probe proves every host is down — avoids
+        # opening a scan_runs record that immediately fails on a dead host (#14).
+        if self._statuses and not any_reachable(self._statuses):
+            self.app.notify(
+                "No Ollama host is reachable. Start Ollama or fix the URL, "
+                "then press C to re-check.", severity="error")
             return
         self.dismiss(self._build_cmd())
 

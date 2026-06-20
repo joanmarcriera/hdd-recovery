@@ -77,8 +77,11 @@
 
 ## Backlog
 
+- [x] #14 Ollama availability pre-check before photo tagging. (2026-06-20)
+  - `tui/ollama.py` probes `/api/tags`; the tag-photos screen shows green/red
+    per-host status (Check [C]) and gates Run when all hosts are down. Tests in
+    `tests/unit/test_ollama.py`.
 - [ ] #12 TUI blocked-stage explanation.
 - [ ] #13 dynamic device blocking in the wizard.
-- [ ] #14 Ollama availability pre-check before photo tagging.
 - [ ] #15 photo dedup clusters in the web UI.
 - [ ] #16 replication reliability improvements.
