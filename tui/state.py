@@ -497,6 +497,9 @@ def get_stage_status(disk: DiskInfo, stage: StageDef) -> StageStatus:  # noqa: C
             return StageStatus.DONE
         if run.status == "partial":
             return StageStatus.PARTIAL
+        if run.status == "interrupted":
+            # killed/crashed/restarted then reconciled by lib/runs.py
+            return StageStatus.PARTIAL
         if run.status == "failed":
             return StageStatus.FAILED
         return StageStatus.PENDING

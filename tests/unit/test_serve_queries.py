@@ -76,5 +76,20 @@ class TestParameterizedPages(unittest.TestCase):
         self.assertGreaterEqual(html.count("2 row(s)"), 2)
 
 
+class TestBadge(unittest.TestCase):
+    def test_known_statuses(self):
+        for status, cls in [("ok", "ok"), ("failed", "failed"),
+                            ("running", "running"), ("partial", "partial")]:
+            self.assertIn(f'badge {cls}', srv.badge(status))
+
+    def test_reconciled_statuses_not_pending(self):
+        # interrupted/timeout must render distinctly, not as "pending"
+        self.assertIn("badge partial", srv.badge("interrupted"))
+        self.assertIn("badge failed", srv.badge("timeout"))
+
+    def test_unknown_falls_back_to_pending(self):
+        self.assertIn("badge pending", srv.badge("weird"))
+
+
 if __name__ == "__main__":
     unittest.main()

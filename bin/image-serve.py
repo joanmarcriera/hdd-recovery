@@ -137,7 +137,10 @@ def h(s):
 
 def badge(status):
     cls = {"ok": "ok", "partial": "partial", "failed": "failed",
-           "running": "running", "error": "error"}.get(str(status).lower(), "pending")
+           "running": "running", "error": "error",
+           # a run reconciled after a kill/crash/restart (see lib/runs.py)
+           "interrupted": "partial", "timeout": "failed"}.get(
+               str(status).lower(), "pending")
     return f'<span class="badge {cls}">{h(status)}</span>'
 
 APP_VERSION = os.environ.get("APP_VERSION", "dev")
