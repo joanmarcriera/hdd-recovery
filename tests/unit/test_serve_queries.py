@@ -104,6 +104,34 @@ class TestParameterizedPages(unittest.TestCase):
         # candidates section + carved-artifacts section, each capped at 2
         self.assertGreaterEqual(html.count("2 row(s)"), 2)
 
+    def test_pictures_shows_cluster_column(self):
+        # Cluster two carved artifacts (#15): ids 1,2 in cluster 7 (1 primary),
+        # id 3 left ungrouped.
+        db = _make_db()
+        try:
+            conn = sqlite3.connect(db)
+            conn.execute("UPDATE recovered_artifacts SET dedup_cluster_id=7,"
+                         " is_cluster_primary=1 WHERE id=1")
+            conn.execute("UPDATE recovered_artifacts SET dedup_cluster_id=7,"
+                         " is_cluster_primary=0 WHERE id=2")
+            conn.commit()
+            conn.close()
+            html = srv.page_pictures(db, limit=500)
+            self._assert_no_sql_error(html)
+            self.assertIn("<th>Cluster</th>", html)
+            self.assertIn("#7", html)        # cluster id rendered
+            self.assertIn("★", html)         # primary marker
+        finally:
+            os.unlink(db)
+
+    def test_gallery_groups_query_valid(self):
+        # The Groups collapse adds a WHERE on dedup columns — assert the query
+        # executes (no SQL error) and the toggle renders, even with no on-disk
+        # image files (rows get filtered out by the realpath check).
+        html = srv.page_gallery(self.db, "/tmp", groups=True)
+        self._assert_no_sql_error(html)
+        self.assertIn("duplicates", html.lower())
+
 
 class TestBadge(unittest.TestCase):
     def test_known_statuses(self):

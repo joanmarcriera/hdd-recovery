@@ -198,7 +198,15 @@ If Ollama is unreachable, the tagging job starts, opens a `scan_runs` record, th
 
 ---
 
-### 15. Photo dedup clusters not visible in web UI
+### 15. Photo dedup clusters not visible in web UI — DONE (2026-06-20)
+
+> `/gallery` gained a "Group duplicates" toggle that collapses each
+> near-duplicate cluster to its primary (ungrouped images still shown) and
+> annotates each tile with its cluster size; `/pictures` carved-artifacts table
+> gained a Cluster column (#id, ★ primary, count). Reads the existing
+> `dedup_cluster_id` / `is_cluster_primary` columns from the dedup-photos stage.
+> Tests in `tests/unit/test_serve_queries.py`.
+
 
 `image-dedup-photos.sh` populates `cluster_id` and `is_primary` in `recovered_artifacts` but neither `/gallery` nor `/pictures` exposes this. Operators cannot identify which recovered photo is the best representative of a duplicate group.
 

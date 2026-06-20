@@ -1474,25 +1474,44 @@ def page_pictures(db_path, limit=500):
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         img_rows = conn.execute(
-            "SELECT method, mime_type, size_bytes, relative_path, full_path FROM recovered_artifacts "
+            "SELECT method, mime_type, size_bytes, relative_path, full_path, "
+            "dedup_cluster_id, is_cluster_primary FROM recovered_artifacts "
             "WHERE mime_type LIKE 'image/%' ORDER BY method, mime_type, size_bytes DESC LIMIT ?",
             (limit,)
         ).fetchall()
+        # Cluster sizes so the table can show how many near-duplicates each
+        # cluster holds (populated by the dedup-photos stage; #15).
+        sizes = dict(conn.execute(
+            "SELECT dedup_cluster_id, COUNT(*) FROM recovered_artifacts "
+            "WHERE dedup_cluster_id IS NOT NULL GROUP BY dedup_cluster_id").fetchall())
         conn.close()
 
         tbl = ('<p class="count">' + str(len(img_rows)) + ' row(s)</p>'
                '<div style="overflow-x:auto"><table>'
-               '<tr><th>Method</th><th>MIME</th><th>Size (B)</th><th>Path</th><th>View</th></tr>')
+               '<tr><th>Method</th><th>MIME</th><th>Size (B)</th><th>Cluster</th>'
+               '<th>Path</th><th>View</th></tr>')
         for r in img_rows:
             fp = r["full_path"] or ""
             fenc = urllib.parse.quote(fp)
             view = (f'<a href="/file?path={fenc}" target="_blank" '
                     f'title="Open image in new tab">&#128247;</a>' if fp else "")
+            cid = r["dedup_cluster_id"]
+            if cid is None:
+                cluster = '<span style="color:#888">—</span>'
+            else:
+                star = ' ★' if r["is_cluster_primary"] else ''
+                n = sizes.get(cid, 1)
+                cluster = (f'#{h(cid)}{star} '
+                           f'<span style="color:#888">({n})</span>')
             tbl += (f'<tr><td>{h(r["method"])}</td><td>{h(r["mime_type"])}</td>'
                     f'<td>{(r["size_bytes"] or 0):,}</td>'
+                    f'<td style="white-space:nowrap">{cluster}</td>'
                     f'<td style="word-break:break-all">{h(r["relative_path"])}</td>'
                     f'<td style="text-align:center">{view}</td></tr>')
-        tbl += '</table></div>'
+        tbl += ('</table></div>'
+                '<p class="count" style="color:#888">★ = cluster primary '
+                '(best representative); (n) = images in that near-duplicate '
+                'cluster. Run the dedup-photos stage to populate clusters.</p>')
         carved_html = tbl
     except Exception as e:
         carved_html = f'<p class="err">{h(str(e))}</p>'
@@ -2139,8 +2158,9 @@ _CARVED_SORT_COLS = {
 
 
 def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
-                 search="", sort="size", order="", method_filter=""):
-    """Paginated image gallery for carved artifacts with sort, method filter, and description search."""
+                 search="", sort="size", order="", method_filter="", groups=False):
+    """Paginated image gallery for carved artifacts with sort, method filter,
+    description search, and an optional near-duplicate "Groups" collapse (#15)."""
     enc = urllib.parse.quote(db_path)
     abs_root = os.path.realpath(root)
     search = search.strip()
@@ -2196,6 +2216,15 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
         if method_filter:
             where_parts.append("ra.method = ?")
             params.append(method_filter)
+        if groups:
+            # Collapse each near-duplicate cluster to its primary; keep images
+            # that were never clustered (dedup-photos not run, or unique).
+            where_parts.append(
+                "(ra.dedup_cluster_id IS NULL OR ra.is_cluster_primary = 1)")
+        # Cluster sizes for the per-thumbnail "(n)" badge.
+        cluster_sizes = dict(conn.execute(
+            "SELECT dedup_cluster_id, COUNT(*) FROM recovered_artifacts "
+            "WHERE dedup_cluster_id IS NOT NULL GROUP BY dedup_cluster_id").fetchall())
         where_clause = " AND ".join(where_parts)
         if join_sql:
             join_sql = join_sql.format(join_type=findings_join)
@@ -2209,6 +2238,7 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
 
         base_sql = (
             f"SELECT ra.id, ra.full_path, ra.mime_type, ra.size_bytes, ra.method, "
+            f"ra.dedup_cluster_id, "
             f"{desc_select} "
             f"FROM recovered_artifacts ra "
             f"{join_sql}"
@@ -2238,6 +2268,8 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
             params["search"] = search
         if method_filter:
             params["method"] = method_filter
+        if groups:
+            params["groups"] = "1"
         for key, value in overrides.items():
             if value is None or value == "" or value is False:
                 params.pop(key, None)
@@ -2255,9 +2287,15 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
         if not fp or not os.path.realpath(fp).startswith(abs_root + os.sep) or not os.path.isfile(fp):
             continue
         fenc = urllib.parse.quote(fp)
+        cid = row["dedup_cluster_id"]
+        csize = cluster_sizes.get(cid, 0) if cid is not None else 0
+        # In Groups mode each tile is a cluster primary — the caption shows how
+        # many near-duplicates it represents.
         tip = f"{Path(fp).name} — {method} — {sz:,} B"
         desc_div = (f'<div class="desc">{h(desc[:200])}</div>' if desc else "")
-        caption = " — ".join(filter(None, [method, f"{sz//1024:,} KB" if sz else ""]))
+        caption = " — ".join(filter(None, [method,
+                                           f"{sz//1024:,} KB" if sz else "",
+                                           f"cluster {cid} (×{csize})" if (groups and csize > 1) else ""]))
         imgs += (
             f'<div style="display:inline-block;text-align:center;vertical-align:top">'
             f'<a href="/file?path={fenc}" target="_blank" class="img-card" title="{h(tip)}">'
@@ -2338,11 +2376,20 @@ def page_gallery(db_path, root, pg=0, per_page=48, all_images=False,
     filter_badge = (f' &nbsp; <span class="badge partial">{h(active_filters)}</span>'
                     if active_filters else "")
 
+    if groups:
+        groups_toggle = (f'<a href="/gallery?{qs_filter(groups=None, page=None, all=None)}" '
+                         f'{btn}>&#9635; Show all duplicates</a>')
+    else:
+        groups_toggle = (f'<a href="/gallery?{qs_filter(groups=1, page=None, all=None)}" '
+                         f'{btn} title="Collapse near-duplicate clusters to one '
+                         f'representative each">&#9636; Group duplicates</a>')
+
     body = f"""
     <div class="panel">
       {header}{tag_note}{filter_badge}
       <p style="margin-top:8px;display:flex;align-items:center;flex-wrap:wrap;gap:10px">
         {toggle}
+        {groups_toggle}
         <span style="font-size:12px;color:var(--sub)">Sort:&nbsp;{sort_bar}</span>
       </p>
       {filter_form}
@@ -2752,7 +2799,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     self.send_html(page_gallery(db, self.root, pg,
                                                 all_images=all_images, search=search,
                                                 sort=sort, order=order,
-                                                method_filter=self.qsval("method")))
+                                                method_filter=self.qsval("method"),
+                                                groups=self.qsval("groups") == "1"))
             elif p == "/export_view":
                 file_id = self.qsval("file_id")
                 abs_path, mime_or_err = export_file_via_icat(db, file_id, self.root)
