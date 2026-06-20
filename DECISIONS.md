@@ -1,5 +1,41 @@
 # Decisions
 
+## 2026-06-20 — Detached Web Runs Are Tracked Per Image DB
+
+**Decision:** F4 stores detached web-launched pipeline and queue jobs in a new
+per-image `supervised_runs` table. A single-image pipeline gets one row in that
+image DB. A multi-image queue gets one matching queue row in each selected image
+DB, all carrying the same queue PID/PGID, command, and log path. Web detection
+checks these rows first and falls back to legacy `pgrep` only for older
+unmanaged launches.
+
+**Alternatives considered:**
+
+- Add a central queue database outside the per-image DB layout.
+- Continue using only `pgrep -af image-queue.py`.
+- Record queue state only in the queue log file.
+
+**Rationale:** The repository already treats each image DB as the durable
+source of truth. Per-image rows avoid adding a second global state file and let
+startup reconciliation work with the same PID marker guard used for `scan_runs`.
+Duplicating queue rows across selected DBs is acceptable because cancellation
+and reconciliation are idempotent against the recorded process group.
+
+**Consequences:**
+
+- Queue cancellation may send SIGTERM to the same PGID more than once when a
+  queue spans multiple DBs; this is harmless.
+- Supervised rows are updated at runner boundaries, while detailed per-stage
+  useful progress remains in `scan_runs`.
+- Existing unmanaged detached jobs can still appear via pgrep fallback until
+  they finish.
+
+**Revisit if:**
+
+- A future multi-user deployment needs one global audit table for all queues.
+- F7 monitor stuckness needs queue-level progress mirrored continuously from
+  active `scan_runs`.
+
 ## 2026-06-20 — Useful Progress Is Separate From Console Output
 
 **Decision:** F3 adds useful-progress probes to `lib/watchdog.py` rather than
@@ -7,8 +43,9 @@ treating stdout/stderr output as proof of progress. The pipeline and queue paths
 now use `STAGE_PROGRESS_TIMEOUT` and `STAGE_PROGRESS_INTERVAL` with per-stage
 counters from `lib/progress.py`; `scan_runs.heartbeat_at` is refreshed on probe
 polls and `scan_runs.last_progress_at` is refreshed only when the counter
-advances. Pipeline stdout-idle timeout is available through `STAGE_IDLE_TIMEOUT`
-but defaults to disabled.
+advances. Probe DB writes are rate-limited to avoid SQLite churn. Pipeline
+stdout-idle timeout is available through `STAGE_IDLE_TIMEOUT` but defaults to
+disabled.
 
 **Alternatives considered:**
 

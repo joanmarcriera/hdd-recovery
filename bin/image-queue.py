@@ -29,6 +29,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 PIPELINE = Path(__file__).resolve().parent / "image-pipeline.py"
+ROOT = PIPELINE.parent.parent
+sys.path.insert(0, str(ROOT))
+from lib.supervised import finish_env_runs, heartbeat_env_runs  # noqa: E402
 
 
 def _ts() -> str:
@@ -115,6 +118,7 @@ def main() -> int:
 
     print(f"[{_ts()}] queue: {len(args.dbs)} image(s), jobs={jobs}, "
           f"stages={','.join(stages)}", flush=True)
+    heartbeat_env_runs(progress=True)
 
     if args.dry_run:
         for db in args.dbs:
@@ -125,11 +129,13 @@ def main() -> int:
                                               args.stage_progress_interval,
                                               args.require_prereqs)),
                   flush=True)
+        finish_env_runs("ok", exit_code=0, notes="dry-run")
         return 0
 
     rcs: list[int] = []
     if jobs == 1:
         for db in args.dbs:
+            heartbeat_env_runs(progress=True)
             rcs.append(run_one(db, stages, args.skip_done, args.keep_going,
                                args.stage_timeout, args.stage_idle_timeout,
                                args.stage_progress_timeout,
@@ -147,7 +153,9 @@ def main() -> int:
 
     failed = sum(1 for rc in rcs if rc != 0)
     print(f"[{_ts()}] queue finished: {len(rcs)-failed} ok, {failed} failed", flush=True)
-    return 1 if failed else 0
+    exit_code = 1 if failed else 0
+    finish_env_runs("failed" if failed else "ok", exit_code=exit_code)
+    return exit_code
 
 
 if __name__ == "__main__":

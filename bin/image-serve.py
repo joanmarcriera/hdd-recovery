@@ -13,6 +13,20 @@ import shlex, sqlite3, subprocess, sys, tempfile, threading, time, urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from lib.supervised import (  # noqa: E402
+    active_supervised_runs,
+    cancel_supervised_run,
+    create_supervised_run,
+    encode_env,
+    finish_supervised_run,
+    reconcile_supervised_runs,
+    set_supervised_process,
+)
+
 # Load PRESETS from image-pipeline.py so the form mirrors the CLI runner.
 _PIPELINE_PATH = Path(__file__).resolve().parent / "image-pipeline.py"
 try:
@@ -575,6 +589,13 @@ def pipeline_active_for(db_path, lines=None):
 
     Pass `lines` (from _pipeline_pgrep_lines) to avoid re-running pgrep per DB.
     """
+    try:
+        for run in active_supervised_runs(db_path, run_kind="pipeline"):
+            if run.pid:
+                return run.pid, run.log_path
+    except Exception:
+        pass
+
     if lines is None:
         lines = _pipeline_pgrep_lines()
     for line in lines:
@@ -647,7 +668,12 @@ def panel_pipeline(db_path):
         log_link = (f' &nbsp;<a href="/pipeline_log?db={enc}&log={log_q}">view log</a>'
                     if log_path else "")
         active = (f'<p><span class="badge running">running</span> '
-                  f'pid {pid}{log_link}</p>')
+                  f'pid {pid}{log_link}</p>'
+                  f'<form method="post" action="/cancel_pipeline" '
+                  f'style="margin:6px 0 10px">'
+                  f'<input type="hidden" name="db" value="{h(db_path)}">'
+                  f'<button type="submit">Cancel pipeline</button>'
+                  f'</form>')
 
     # recent logs
     export_root = db_export_root(db_path)
@@ -723,11 +749,27 @@ def spawn_pipeline(db_path, presets, keep_going=False, skip_done=False):
         fh.write(f"[{datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')}] "
                  f"spawned: {shlex.join(cmd)}\n")
 
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        start_new_session=True
-    )
+    run_id = create_supervised_run(db_path, "pipeline", shlex.join(cmd), log_path)
+    env = os.environ.copy()
+    env["SUPERVISED_RUNS"] = encode_env([(db_path, run_id)])
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, env=env
+        )
+    except Exception as exc:
+        finish_supervised_run(db_path, run_id, "failed", notes=str(exc))
+        raise
+    set_supervised_process(db_path, run_id, proc.pid)
     return log_path, proc.pid
+
+
+def cancel_active_pipeline(db_path):
+    count = 0
+    for run in active_supervised_runs(db_path, run_kind="pipeline", reconcile=False):
+        if cancel_supervised_run(db_path, run.run_id):
+            count += 1
+    return count
 
 
 # ── multi-image queue ─────────────────────────────────────────────────────────
@@ -773,8 +815,17 @@ def build_queue_cmd(dbs, stages, jobs, skip_done, keep_going):
     return cmd
 
 
-def queue_active():
+def queue_active(root=None):
     """Return (pid, argv) of a running image-queue.py, or (None, None)."""
+    if root is not None:
+        try:
+            for db_path in find_databases(root):
+                for run in active_supervised_runs(db_path, run_kind="queue"):
+                    if run.pid:
+                        return run.pid, run.command_line
+        except Exception:
+            pass
+
     try:
         out = subprocess.run(["pgrep", "-af", "image-queue.py"],
                              capture_output=True, text=True, timeout=5)
@@ -805,9 +856,43 @@ def spawn_queue(root, dbs, presets, jobs=1, skip_done=True, keep_going=True):
 
     cmd = build_queue_cmd(dbs, stages, jobs, skip_done, keep_going)
     logfh = open(log_path, "a")
-    proc = subprocess.Popen(cmd, stdout=logfh, stderr=subprocess.STDOUT,
-                            start_new_session=True)
+    supervised = []
+    command_line = shlex.join(cmd)
+    for db in dbs:
+        run_id = create_supervised_run(
+            db,
+            "queue",
+            command_line,
+            log_path,
+            notes=f"presets={','.join(presets)} jobs={jobs}",
+        )
+        supervised.append((db, run_id))
+    env = os.environ.copy()
+    env["SUPERVISED_RUNS"] = encode_env(supervised)
+    try:
+        proc = subprocess.Popen(cmd, stdout=logfh, stderr=subprocess.STDOUT,
+                                start_new_session=True, env=env)
+    except Exception as exc:
+        for db, run_id in supervised:
+            finish_supervised_run(db, run_id, "failed", notes=str(exc))
+        raise
+    for db, run_id in supervised:
+        set_supervised_process(db, run_id, proc.pid)
     return log_path, proc.pid
+
+
+def cancel_active_queue(root):
+    seen = set()
+    count = 0
+    for db_path in find_databases(root):
+        for run in active_supervised_runs(db_path, run_kind="queue", reconcile=False):
+            key = (run.db_path, run.run_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            if cancel_supervised_run(run.db_path, run.run_id):
+                count += 1
+    return count
 
 
 def page_queue(root):
@@ -815,13 +900,16 @@ def page_queue(root):
     if not PIPELINE_PRESETS:
         return page("Queue", '<div class="panel err">image-pipeline.py failed to load.</div>')
     dbs = find_databases(root)
-    qpid, _ = queue_active()
+    qpid, _ = queue_active(root)
 
     active = ""
     if qpid:
         active = (f'<div class="panel" style="border-left:4px solid #22aa44">'
                   f'<span class="badge running">running</span> a queue is active '
-                  f'(pid {qpid}). <a href="/queue_log">view queue log</a></div>')
+                  f'(pid {qpid}). <a href="/queue_log">view queue log</a>'
+                  f'<form method="post" action="/cancel_queue" '
+                  f'style="margin-top:8px"><button type="submit">'
+                  f'Cancel queue</button></form></div>')
 
     # image checkboxes (default all checked)
     img_rows = ""
@@ -1030,7 +1118,7 @@ def queue_log_payload(root, log_path, tail_kb=64):
             fh.readline()
         tail = fh.read().decode("utf-8", errors="replace")
     return {"real": real, "size": size, "tail": _collapse_queue_noise(tail),
-            "running": bool(queue_active()[0]),
+            "running": bool(queue_active(root)[0]),
             "progress": _queue_progress_cached(real)}
 
 
@@ -2649,7 +2737,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_html(page_queue(self.root))
             elif p == "/api/queue":
                 # Machine-readable queue progress for monitoring/automation.
-                qpid, _ = queue_active()
+                qpid, _ = queue_active(self.root)
                 qdir = os.path.realpath(_queue_log_dir(self.root))
                 logs = sorted(glob.glob(os.path.join(qdir, "queue-*.log")),
                               key=os.path.getmtime, reverse=True)
@@ -2742,6 +2830,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 f'/pipeline_log?db={urllib.parse.quote(db)}'
                 f'&log={urllib.parse.quote(log_path)}')
             self.end_headers()
+        elif p == "/cancel_pipeline":
+            if db and os.path.isfile(db):
+                cancel_active_pipeline(db)
+            self.send_response(302)
+            self.send_header(
+                "Location",
+                f'/db?db={urllib.parse.quote(db)}' if db else "/",
+            )
+            self.end_headers()
         elif p == "/queue":
             sel_dbs = params.get("db", [])
             presets = params.get("preset", [])
@@ -2754,7 +2851,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     '<p class="err">Select at least one image and one preset.</p>'
                     '<p><a href="/queue">&larr; back</a></p>'), 400)
                 return
-            if queue_active()[0]:
+            if queue_active(self.root)[0]:
                 self.send_response(302)
                 self.send_header("Location", "/queue_log")
                 self.end_headers()
@@ -2773,6 +2870,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", f'/queue_log?log={urllib.parse.quote(log_path)}')
             self.end_headers()
+        elif p == "/cancel_queue":
+            cancel_active_queue(self.root)
+            self.send_response(302)
+            self.send_header("Location", "/queue_log")
+            self.end_headers()
         else:
             self.send_html(page("405", "<p>Method not allowed.</p>"), 405)
 
@@ -2790,7 +2892,7 @@ def main():
 
     Handler.root = args.root
 
-    # Startup reconciliation: correct scan_runs rows left 'running' by a previous
+    # Startup reconciliation: correct rows left 'running' by a previous
     # kill/crash/restart so the UI doesn't show phantom-active stages. Best-effort.
     try:
         _repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -2798,13 +2900,17 @@ def main():
             sys.path.insert(0, _repo)
         from lib.runs import reconcile_running
         total = 0
+        supervised_total = 0
         for db in find_databases(args.root):
             try:
                 total += reconcile_running(db)
+                supervised_total += reconcile_supervised_runs(db)
             except Exception:
                 pass
         if total:
             print(f"Reconciled {total} stale 'running' run(s) at startup.")
+        if supervised_total:
+            print(f"Reconciled {supervised_total} stale supervised run(s) at startup.")
     except Exception as e:
         print(f"(startup reconcile skipped: {e})")
 

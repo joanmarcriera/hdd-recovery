@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -196,14 +197,20 @@ class StageProgressProbe:
     db_path: str
     stage: str
     map_path: str = ""
+    min_db_update_interval: float = 30.0
 
     _run_id: int | None = None
+    _last_heartbeat_write: float = 0.0
+    _last_progress_write: float = 0.0
 
     def __call__(self) -> int | None:
         run = latest_running_scan_run(self.db_path, self.stage)
         if run:
             self._run_id = run.run_id
-            touch_scan_run(self.db_path, run.run_id, progress=False)
+            now = time.monotonic()
+            if now - self._last_heartbeat_write >= self.min_db_update_interval:
+                touch_scan_run(self.db_path, run.run_id, progress=False)
+                self._last_heartbeat_write = now
         elif not self.stage.startswith("ddrescue-"):
             return None
 
@@ -246,7 +253,10 @@ class StageProgressProbe:
             run = latest_running_scan_run(self.db_path, self.stage)
             run_id = run.run_id if run else None
         if run_id is not None:
-            touch_scan_run(self.db_path, run_id, progress=True)
+            now = time.monotonic()
+            if now - self._last_progress_write >= self.min_db_update_interval:
+                touch_scan_run(self.db_path, run_id, progress=True)
+                self._last_progress_write = now
 
 
 def build_stage_progress_probe(

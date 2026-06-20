@@ -35,6 +35,7 @@ sys.path.insert(0, str(ROOT))
 from tui.stages import STAGES  # noqa: E402
 from lib.runs import reconcile_running  # noqa: E402
 from lib.progress import build_stage_progress_probe  # noqa: E402
+from lib.supervised import finish_env_runs, heartbeat_env_runs  # noqa: E402
 from lib.watchdog import (  # noqa: E402
     DEFAULT_PROGRESS_INTERVAL,
     DEFAULT_PROGRESS_TIMEOUT,
@@ -427,7 +428,11 @@ def main() -> int:
 
     results: list[tuple[str, str, float, int]] = []
     failed_any = False
+    if args.run:
+        heartbeat_env_runs(progress=True)
     for i, s in enumerate(plan, 1):
+        if args.run:
+            heartbeat_env_runs(progress=True)
         log(f"[{i}/{len(plan)}] {s.key} — {s.name} ({s.runtime_hint})", fh)
         if args.skip_done and s.scan_run_key and stage_is_done(args.db, s.scan_run_key):
             log(f"  SKIP: already completed (status=ok in scan_runs)", fh)
@@ -463,6 +468,7 @@ def main() -> int:
         status = "ok" if rc == 0 else ("timeout" if rc == TIMEOUT_RC else "failed")
         results.append((s.key, status, dt, rc))
         log(f"  -> {status} in {dt:.1f}s (rc={rc})", fh)
+        heartbeat_env_runs(progress=True)
         if rc != 0:
             failed_any = True
             if not args.keep_going:
@@ -476,7 +482,13 @@ def main() -> int:
     if fh:
         fh.close()
 
-    return 1 if (args.run and failed_any) else 0
+    exit_code = 1 if (args.run and failed_any) else 0
+    if args.run:
+        finish_env_runs(
+            "failed" if failed_any else "ok",
+            exit_code=exit_code,
+        )
+    return exit_code
 
 
 if __name__ == "__main__":

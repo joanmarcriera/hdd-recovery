@@ -36,6 +36,26 @@ CREATE TABLE IF NOT EXISTS scan_runs (
   cancel_requested INTEGER DEFAULT 0
 );
 
+CREATE TABLE IF NOT EXISTS supervised_runs (
+  id INTEGER PRIMARY KEY,
+  run_kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  started_at TEXT NOT NULL,
+  ended_at TEXT,
+  command_line TEXT,
+  log_path TEXT,
+  pid INTEGER,
+  pgid INTEGER,
+  host TEXT,
+  heartbeat_at TEXT,
+  last_progress_at TEXT,
+  cancel_requested INTEGER DEFAULT 0,
+  exit_code INTEGER,
+  notes TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_supervised_status
+  ON supervised_runs(status, run_kind, started_at);
+
 CREATE TABLE IF NOT EXISTS partitions (
   id INTEGER PRIMARY KEY,
   slot TEXT,

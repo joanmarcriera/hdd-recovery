@@ -402,11 +402,17 @@ durable, **progress-aware** run supervisor. Eight findings (F1–F8).
   `STAGE_PROGRESS_TIMEOUT`, and `STAGE_PROGRESS_INTERVAL`. Tests in
   `tests/unit/test_progress.py`, `tests/unit/test_watchdog.py`, and
   `tests/unit/test_pipeline.py`.
+- **F4 — Durable supervised runs.** Added `supervised_runs` to the schema and
+  `lib/supervised.py` for durable detached pipeline/queue records with PID/PGID,
+  command, log, heartbeat, progress, cancel flag, exit code, final status and
+  stale-run reconciliation. Web pipeline and queue launches create rows before
+  `Popen`, pass `SUPERVISED_RUNS` to child runners, attach PID/PGID after
+  launch, and expose cancel buttons. `image-pipeline.py`, `image-queue.py`, and
+  web startup update/reconcile those rows. Tests in
+  `tests/unit/test_supervised.py`.
 
 ### Pending (bigger, build on F2's durable columns)
 
-- **F4 — Durable job table for queue/detached runs.** Replace pgrep-only queue
-  detection with a supervised-runs record (PID/PGID, log, heartbeat, cancel).
 - **F5 — Maintain `crack_tasks` progress.** Parse `hashcat --status` into
   `progress_pct`/`eta_seconds`; enforce max runtime; preserve checkpoint/restore.
 - **F7 — Stuckness in the monitor.** Compare current vs prior activity; show

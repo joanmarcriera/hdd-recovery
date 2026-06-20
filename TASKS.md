@@ -24,13 +24,19 @@
     useful progress for the configured window; add focused tests without
     touching source media.
 
-## Next
-
-- [ ] F4 durable job table for queue/detached runs.
+- [x] F4 durable job table for queue/detached runs.
   - Completion criteria: add a `supervised_runs` table with PID/PGID, command,
     log, heartbeat, last progress, cancel flag and final status; write it when
     web queue or detached pipeline jobs launch; replace pgrep-only queue
     detection; reconcile stale rows at startup; add focused unit tests.
+
+## Next
+
+- [ ] F5 maintain `crack_tasks` progress.
+  - Completion criteria: parse hashcat status output into
+    `crack_tasks.progress_pct` and `crack_tasks.eta_seconds`; enforce a maximum
+    runtime; preserve checkpoint/restore behavior; add focused tests without
+    requiring GPU/hashcat.
 
 - [ ] #18 split `bin/image-serve.py`.
   - Completion criteria: extract cohesive route/page/db/util modules behind a
