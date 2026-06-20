@@ -1136,6 +1136,36 @@ STAGES: list[StageDef] = [
         is_manual=True,
         requires_prior=["extract-winmem"],
     ),
+    StageDef(
+        key="detect-encrypted",
+        number=50,
+        name="Detect Encrypted Containers",
+        description=(
+            "Find encrypted containers and volumes — common crypto-holder backup "
+            "strategies that the keyword/picture detectors miss entirely.\n\n"
+            "Detects:\n"
+            "  volume-level  LUKS and BitLocker partitions / whole-disk encryption\n"
+            "                (parses the image partition table; no mount)\n"
+            "  file-level    KeePass (.kdbx), PGP/GPG key material, encrypted ZIP,\n"
+            "                7z/RAR archives, and VeraCrypt/TrueCrypt containers\n"
+            "                (entropy + extension, since they have no magic)\n\n"
+            "Signature matches are high-confidence; entropy/extension hits are "
+            "low-confidence leads for human review. Results written to:\n"
+            "  findings table (source_tool=encrypted-detect, category=encrypted-container)\n"
+            "  hits/encrypted/hits-<timestamp>.tsv\n\n"
+            "Query results:\n"
+            "  image-query.sh <db> findings encrypted-detect"
+        ),
+        script="image-detect-encrypted-containers.sh",
+        args_template=["{db}"],
+        scan_run_key="detect-encrypted",
+        pgrep_pattern="image-detect-encrypted",
+        runtime_hint="2 – 30 min",
+        rerunnable=True,
+        requires_db_write=True,
+        is_optional=True,
+        requires_prior=["init-db"],
+    ),
 ]
 
 STAGE_BY_KEY: dict[str, StageDef] = {s.key: s for s in STAGES}

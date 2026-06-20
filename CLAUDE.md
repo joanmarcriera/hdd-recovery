@@ -107,13 +107,15 @@ Every bin script sources this. Key functions:
 | `bin/image-index-tsk.sh <db>` | Filesystem-aware file inventory via fiwalk; populates `files` table |
 | `bin/image-detect-wallets.sh <db>` | Scores files against wallet keywords/extensions; populates `wallet_candidates` |
 | `bin/image-detect-pictures.sh <db>` | Scores files for picture extensions/paths; populates `picture_candidates` |
+| `bin/image-detect-encrypted-containers.sh <db> [--max-files N] [--no-corpus]` | Detects encrypted containers/volumes — LUKS/BitLocker partitions (partition-table walk, no mount), KeePass/PGP/encrypted-archive signatures, and VeraCrypt/TrueCrypt by entropy+extension; writes `findings` (`source_tool=encrypted-detect`). Signature hits are high-confidence; entropy/extension hits are review leads. Pure logic in `lib/encrypted.py`. |
 
 ### Wallet Recovery
 
 | Script | Purpose |
 |--------|---------|
 | `bin/image-wallet-inspect.sh <db> --run` | pywallet inspection of wallet.dat candidates; writes `wallet_keys` and findings |
-| `bin/image-crack-wallet.sh <db> --run` | Manual bitcoin2john/hashcat wallet.dat cracking; GPU preflight required unless explicit CPU fallback |
+| `bin/image-gen-wordlist.sh <db> [--out <path>] [--base <path>] [--no-base]` | Build a targeted password wordlist from disk artifacts (`bulk_extractor_hits` email/domain/name features) via `lib/wordlist.py`; personal candidates first, then base (rockyou) appended and deduped. Needs a prior `bulk-extractor-raw` pass. Feed the output to `image-crack-wallet.sh --wordlist`. |
+| `bin/image-crack-wallet.sh <db> --run [--wordlist <path>]` | Manual bitcoin2john/hashcat wallet.dat cracking; GPU preflight required unless explicit CPU fallback. Pair with `image-gen-wordlist.sh` for a disk-targeted list. |
 | `bin/image-btcrecover.sh <db> --config <yml> --run` | Operator-driven btcrecover for partial seed/password recovery; tracks `crack_tasks` |
 | `bin/image-crack-keepass.sh <db> --run` | KeePass KDBX cracking via keepass2john/hashcat or explicit keepass4brute CPU path |
 

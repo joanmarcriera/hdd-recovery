@@ -55,7 +55,7 @@ CRACKING_KEYS = {"crack-wallet", "crack-keepass", "btcrecover"}
 PRESETS: dict[str, list[str]] = {
     "fast":      ["structure-scan", "index-tsk", "detect-wallets", "detect-pictures"],
     "carve":     ["carve-foremost", "carve-scalpel"],
-    "wallet":    ["detect-wallets", "wallet-inspect", "text-seed-scan"],
+    "wallet":    ["detect-wallets", "detect-encrypted", "wallet-inspect", "text-seed-scan"],
     "photos":    ["detect-pictures", "enrich-photos", "dedup-photos", "tag-photos"],
     "windows":   ["ntfs-artifact-summary", "regripper", "rifiuti2",
                   "extract-winmem"],
@@ -74,7 +74,8 @@ PRESETS: dict[str, list[str]] = {
         # Phase 4: carving (lightest first)
         "carve-recoverjpeg", "carve-foremost", "carve-scalpel", "carve-magicrescue",
         # Phase 5: post-carve analysis (needs carving done)
-        "bulk-extractor-recovered", "text-seed-scan", "enrich-trid", "recoll-index",
+        "bulk-extractor-recovered", "text-seed-scan", "detect-encrypted",
+        "enrich-trid", "recoll-index",
         # Phase 6: Windows forensics (needs bulk-extractor-raw)
         "ntfs-artifact-summary", "regripper", "rifiuti2",
         # Phase 7: timeline + broad unallocated recovery

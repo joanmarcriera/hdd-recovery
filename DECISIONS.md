@@ -1,5 +1,45 @@
 # Decisions
 
+## 2026-06-20 — Encrypted-Container Detection Uses a Pure Classifier, Not YARA
+
+**Decision:** The `detect-encrypted` stage (#7) puts its detection logic in a
+pure, unit-tested module `lib/encrypted.py` (byte-signature classification +
+Shannon-entropy heuristic + MBR/GPT partition-table parsing) rather than relying
+solely on YARA rules. `bin/image-detect-encrypted-containers.sh` does only the
+I/O and SQLite writes. Signature hits (LUKS, BitLocker, KeePass, PGP, encrypted
+ZIP) are high-confidence; extension+entropy hits (VeraCrypt/TrueCrypt, which have
+no magic by design) are deliberately low-confidence review leads.
+
+**Alternatives considered:**
+
+- Add an `encrypted_containers.yar` ruleset and let the existing `yara-scan`
+  stage handle it.
+- Shell out to `cryptsetup`/`binwalk`/`file` per partition.
+- Detect only by file extension.
+
+**Rationale:** YARA cannot express the entropy + partition-offset logic that
+header-less containers (VeraCrypt) and whole-disk/partition LUKS/BitLocker
+require, and a YARA dependency for the core path is avoidable. A pure module is
+testable offline with synthetic bytes (no forensic tools, no source media) and
+keeps the false-positive discipline from CLAUDE.md (signature vs. lead).
+
+**Consequences:**
+
+- Detection runs with only `python3` available; YARA stays optional and scoped to
+  the separate `yara-scan` wallet pass.
+- VeraCrypt/TrueCrypt detection is best-effort (entropy + extension) and is
+  surfaced as a low-confidence lead, never a conclusion.
+- Re-running the stage is idempotent: it clears prior
+  `source_tool='encrypted-detect'` findings (reproducible from the same inputs)
+  while leaving recovered files on disk untouched.
+
+**Revisit if:**
+
+- A reliable VeraCrypt backup-header heuristic emerges that warrants higher
+  confidence scoring.
+- Volume-level detection needs full TSK/`cryptsetup` validation beyond header
+  signatures.
+
 ## 2026-06-20 — Monitor Stuckness Uses Process Activity First
 
 **Decision:** F7 classifies running TUI stages using per-process CPU and I/O

@@ -68,7 +68,15 @@ Most scripts lack `set -Eeuo pipefail`. A carving tool that exits 1 can silently
 
 ---
 
-### 7. Encrypted container detection missing
+### 7. Encrypted container detection missing — DONE (2026-06-20)
+
+> Shipped as `bin/image-detect-encrypted-containers.sh` (stage `detect-encrypted`).
+> Detection logic is pure/tested in `lib/encrypted.py` rather than YARA-only:
+> partition-table walk for LUKS/BitLocker volumes, signature classification for
+> KeePass/PGP/encrypted ZIP/7z/RAR, and entropy+extension heuristics for
+> VeraCrypt/TrueCrypt. Findings land in SQLite (`source_tool=encrypted-detect`).
+> In the `full` and `wallet` presets; tests in `tests/unit/test_encrypted.py`.
+
 
 No detection for VeraCrypt volumes, BitLocker-encrypted partitions, LUKS containers, or encrypted ZIP/7z archives. These are common backup strategies for crypto holders and would produce high-value leads.
 
@@ -88,7 +96,14 @@ The same `wallet.dat` found by TSK index, carving, and ext recovery creates 3 se
 
 ---
 
-### 9. Targeted wordlist generation for wallet cracking
+### 9. Targeted wordlist generation for wallet cracking — DONE (2026-06-20)
+
+> Shipped as `bin/image-gen-wordlist.sh` (pure logic in `lib/wordlist.py`).
+> Extracts email local-parts, screen names, and non-common domain labels from
+> `bulk_extractor_hits`, emits personal candidates first, then appends the base
+> wordlist (rockyou) deduped. `image-crack-wallet.sh` already takes `--wordlist`.
+> Tests in `tests/unit/test_wordlist.py`.
+
 
 `bin/image-crack-wallet.sh` hardcodes `rockyou.txt` as the only wordlist. A wordlist built from artifacts already found on the disk (email addresses, screen names, domain fragments from `bulk_extractor_hits`) is far more likely to match a personal password.
 
@@ -98,7 +113,18 @@ The same `wallet.dat` found by TSK index, carving, and ext recovery creates 3 se
 
 ---
 
-### 10. RAW photo format support gaps
+### 10. RAW photo format support gaps — VERIFIED NOT NEEDED (2026-06-20)
+
+> Investigated before implementing. RAW recovery is already covered end-to-end:
+> the `photorec-broad` stage (in the `full` preset) runs `--profile broad` =
+> `fileopt,everything,enable,search`, enabling **all** PhotoRec formats incl.
+> Canon CR2, Nikon NEF, Sony ARW, DNG, RAF, ORF. `PICTURE_EXTENSIONS` in
+> `config/analysis-pipeline.env` already lists `cr2 nef arw dng raf orf`, so
+> recovered RAW files are classified as picture candidates. Adding CR2/NEF/ARW
+> headers to scalpel would only duplicate PhotoRec and add carving noise
+> (contradicting the "carving produces duplicates" lesson). Not implemented.
+> The original fix text below is retained for context.
+
 
 `foremost` and `scalpel` have limited support for Canon CR2, Nikon NEF, and Sony ARW formats. These are common on cameras from the era that matches the target disks. PhotoRec supports them but may not be configured.
 
@@ -336,7 +362,7 @@ Investigation of slow `:7788` (web review UI, `image-serve.py`) and `:7682`
 - **#17 (findings/wallet_keys/crack_tasks not in schema)** — these tables are now
   in `sql/analysis-schema.sql`; only a harmless defensive `CREATE TABLE IF NOT
   EXISTS` remains inline in `image-tag-photos.py`.
-- **#18 line count** — `image-serve.py` is now ~2,720 lines (was 2,007). Refactor
+- **#18 line count** — `image-serve.py` is now ~2,930 lines (was 2,007). Refactor
   still pending (deferred).
 - **#20 (smoke-test portability)** — partially addressed: a fixture-free
   `tests/unit/` suite now runs in CI and locally. The fixture-based
