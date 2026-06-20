@@ -26,3 +26,19 @@ agent-skills/
 # TrueNAS / desktop files
 .DS_Store
 Thumbs.db
+
+# Dev/agent tooling and notes — never needed in the build context.
+# (The image only COPYs bin/ lib/ sql/ config/ tui/, so these were never baked
+# in, but excluding them keeps the context sent to the Docker daemon small.)
+.github/
+.agents/
+.codebuddy/
+.continue/
+.junie/
+.kiro/
+docs/
+AGENTS.md
+IMPROVEMENTS.md
+NEXT-RUN-TODO.md
+skills-lock.json
+.claude/

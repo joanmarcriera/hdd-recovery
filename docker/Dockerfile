@@ -45,12 +45,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-plaso \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# ── Pinned PyPI dependencies (reproducible builds) ───────────────────────────
+# Single source of truth for the formerly-unpinned pip installs (bsddb3, ecdsa,
+# pycryptodome, volatility3, imagehash). See docker/requirements.txt.
+COPY docker/requirements.txt /tmp/hdd-requirements.txt
+RUN python3 -m pip install --break-system-packages -r /tmp/hdd-requirements.txt
+
 # ── pywallet (GSC Python 3 fork) ─────────────────────────────────────────────
 ARG PYWALLET_COMMIT=5376a54a36f75cec7226de7cca1511e9cf058f37
 RUN git clone https://github.com/Great-Software-Company/pywallet.git /opt/pywallet \
     && cd /opt/pywallet \
     && git checkout "$PYWALLET_COMMIT" \
-    && python3 -m pip install --break-system-packages bsddb3 ecdsa pycryptodome \
     && printf '%s\n' \
       'from setuptools import setup' \
       'setup(name="pywallet-gsc", version="2.3", py_modules=["pywallet"])' \
@@ -77,11 +82,7 @@ RUN git clone https://github.com/3rdIteration/btcrecover.git /opt/btcrecover \
     && btcrecover.py --help >/dev/null \
     && seedrecover.py --help >/dev/null
 
-# ── Volatility3 ──────────────────────────────────────────────────────────────
-RUN python3 -m pip install --break-system-packages volatility3
-
-# ── Photo perceptual hashing ─────────────────────────────────────────────────
-RUN python3 -m pip install --break-system-packages imagehash
+# Volatility3 and imagehash are installed from docker/requirements.txt above.
 
 # ── xfs_undelete (Tcl script, requires tcllib from apt) ─────────────────────
 ARG XFS_UNDELETE_REF=43fec30088d4bdc608a43a1aa81f2525dd260d17

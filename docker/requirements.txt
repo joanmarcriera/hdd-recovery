@@ -1,0 +1,25 @@
+# Pinned Python dependencies for the hdd-forensics image.
+#
+# These were previously installed unpinned in docker/Dockerfile, so each rebuild
+# could silently pull a different version. Versions below are known-good and
+# mutually compatible on Kali rolling (Python 3.11+).
+#
+# Tools whose own requirements files we defer to are NOT listed here:
+#   - btcrecover : installs its upstream requirements.txt (git-pinned by commit)
+#   - pywallet   : git-pinned by commit; its runtime deps (bsddb3/ecdsa/
+#                  pycryptodome) ARE pinned here because they come from PyPI.
+#
+# To regenerate an exact lock from a known-good running container:
+#   docker exec hdd-forensics python3 -m pip freeze > docker/requirements.lock.txt
+# then promote the relevant lines here.
+
+# pywallet runtime deps (Berkeley DB binding + crypto)
+bsddb3==6.2.9
+ecdsa==0.19.0
+pycryptodome==3.20.0
+
+# Windows memory forensics
+volatility3==2.7.0
+
+# Perceptual photo de-duplication
+imagehash==4.3.1
