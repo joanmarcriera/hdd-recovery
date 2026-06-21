@@ -67,6 +67,7 @@ from lib.serve_pipeline import (  # noqa: E402
 )
 from lib.serve_queue_log import queue_progress_cached as _queue_progress_cached  # noqa: E402
 from lib.serve_ui import h, human_size as _human_size, page  # noqa: E402
+from lib.reset import ResetError, perform_reset  # noqa: E402
 from lib.supervised import reconcile_supervised_runs  # noqa: E402
 
 _WEB_AUTH_REALM = "hdd-recovery"
@@ -543,6 +544,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", "/queue_log")
             self.end_headers()
+        elif p == "/reset_image":
+            enc = urllib.parse.quote(db) if db else ""
+            if not db or not os.path.isfile(db):
+                self.send_html(page("Reset",
+                    '<p class="err">missing or unknown db</p>'), 400)
+                return
+            confirm = pval("confirm", "").strip()
+            img_name = query_scalar(
+                db, "SELECT image_name FROM image_info WHERE id=1", "") or ""
+            if not img_name or confirm != img_name:
+                self.send_html(page("Reset",
+                    '<p class="err">Confirmation did not match the image name. '
+                    'Nothing was deleted.</p>'
+                    f'<p><a href="/db?db={enc}">&larr; back</a></p>'), 400)
+                return
+            try:
+                result = perform_reset(db)
+            except ResetError as e:
+                self.send_html(page("Reset",
+                    f'<p class="err">Reset refused: {h(str(e))}</p>'
+                    f'<p><a href="/db?db={enc}">&larr; back</a></p>'), 409)
+                return
+            except Exception as e:
+                self.send_html(page("Reset",
+                    f'<p class="err">Reset failed: {h(str(e))}</p>'
+                    f'<p><a href="/db?db={enc}">&larr; back</a></p>'), 500)
+                return
+            _HOME_CACHE.pop(self.root, None)
+            freed = _human_size(result.freed_bytes)
+            self.send_html(page("Reset",
+                f'<div class="panel"><p>Reset <b>{h(img_name)}</b>: deleted '
+                f'{len(result.deleted)} target(s), freed {h(freed)}.</p>'
+                '<p>The raw image and ddrescue map were kept. Re-register it from '
+                '<a href="/images/new">Scan for new images</a> to analyse again.</p>'
+                '<p><a href="/">&larr; Dashboard</a></p></div>'))
         else:
             self.send_html(page("405", "<p>Method not allowed.</p>"), 405)
 
@@ -581,6 +617,23 @@ def main():
             print(f"Reconciled {supervised_total} stale supervised run(s) at startup.")
     except Exception as e:
         print(f"(startup reconcile skipped: {e})")
+
+    # Loud storage check: warn if any data root resolves to the container
+    # overlay layer (silent data loss on recreate — the FastPool bug).
+    try:
+        from lib.storage_guard import check_environment, dangerous_roots
+        danger = dangerous_roots(check_environment())
+        if danger:
+            print("=" * 72)
+            print("WARNING: data roots resolve to the container OVERLAY layer.")
+            print("These writes are NOT persisted and are discarded on recreate:")
+            for r in danger:
+                print(f"  {r.name} = {r.path}")
+            print("Bind-mount them or set the env var under a mounted path; see")
+            print("docker/docker-compose.yml. Run bin/storage-check.sh for details.")
+            print("=" * 72)
+    except Exception as e:
+        print(f"(storage check skipped: {e})")
 
     server = http.server.ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"hdd-recovery web UI  →  http://{args.host}:{args.port}/")

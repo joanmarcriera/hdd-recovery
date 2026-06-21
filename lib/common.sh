@@ -67,8 +67,38 @@ ensure_image_file() {
   [[ -f "$1" ]] || die "image file not found: $1"
 }
 
+assert_storage_safe() {
+  # Refuse to write into the container's writable overlay layer. Unmounted data
+  # roots (the /data/* defaults) silently land there — on TrueNAS that fills the
+  # FastPool SSD and is discarded on the next container recreate. Enforced only
+  # inside the container; override with HDD_ALLOW_OVERLAY=1. See lib/storage_guard.py.
+  [[ "${_HDD_STORAGE_CHECKED:-}" == "1" ]] && return 0
+  [[ "${HDD_ALLOW_OVERLAY:-}" == "1" ]] && { _HDD_STORAGE_CHECKED=1; return 0; }
+  if [[ "${HDD_IN_CONTAINER:-}" != "1" && ! -e /.dockerenv ]]; then
+    _HDD_STORAGE_CHECKED=1
+    return 0
+  fi
+  command -v python3 >/dev/null 2>&1 || return 0
+  export IMAGE_ROOT EXPORT_ROOT LOG_ROOT DB_ROOT
+  local bad
+  bad="$(PYTHONPATH="$ROOT_DIR" python3 - <<'PY' 2>/dev/null
+import os, sys
+sys.path.insert(0, os.environ["PYTHONPATH"])
+from lib.storage_guard import check_environment, dangerous_roots
+print(",".join(f"{r.name}={r.path}" for r in dangerous_roots(check_environment())))
+PY
+)"
+  if [[ -n "$bad" ]]; then
+    die "data roots resolve to the container overlay (data would be lost on recreate): $bad
+Bind-mount them to a dataset, or set the env var under an already-mounted path.
+Run bin/storage-check.sh for details, or set HDD_ALLOW_OVERLAY=1 to override."
+  fi
+  _HDD_STORAGE_CHECKED=1
+}
+
 ensure_db() {
   [[ -n "${1:-}" ]] || die "database path is required"
+  assert_storage_safe
   ensure_parent_dir "$1"
   sqlite3 "$1" < "$SCHEMA_FILE" >/dev/null
   apply_schema_migrations "$1"
@@ -158,6 +188,7 @@ EOF
 
 ensure_work_dirs() {
   local export_root="$1"
+  assert_storage_safe
   mkdir -p \
     "$export_root/logs" \
     "$export_root/reports" \

@@ -15,8 +15,11 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from lib.serve_db import find_databases, query_scalar, run_query
+from lib.serve_db import db_export_root, find_databases, query_scalar, run_query
 from lib.serve_images import discover_images, image_roots
+from lib.storage_guard import (
+    check_environment, dangerous_roots, overlay_allowed,
+)
 from lib.serve_mapfile import MAP_STATUS as _MAP_STATUS, map_svg as _map_svg, parse_mapfile
 from lib.serve_pipeline import (
     PIPELINE_PRESETS,
@@ -35,6 +38,39 @@ from lib.serve_queue_log import (
 from lib.serve_ui import badge, h, human_size as _human_size, mem_panel, page, table_html
 
 BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
+
+
+def storage_warning_banner():
+    """Red banner when any data root resolves to the container overlay layer.
+
+    This is the exact misconfiguration that silently filled the FastPool SSD and
+    discarded exports on recreate. Returns '' when storage is healthy.
+    """
+    try:
+        danger = dangerous_roots(check_environment())
+    except Exception:
+        return ""
+    if not danger:
+        return ""
+    rows = "".join(
+        f'<li><code>{h(r.name)}</code> &rarr; <code>{h(r.path)}</code></li>'
+        for r in danger)
+    overridden = (' <b>(enforcement overridden by HDD_ALLOW_OVERLAY=1 — writes '
+                  'are still going to the overlay)</b>') if overlay_allowed() else ""
+    return (
+        '<div class="panel" style="border-left:5px solid #cc2222;background:#2a1414">'
+        '<h2 style="color:#ff6b6b;margin-top:0">&#9888; Storage misconfigured — '
+        'data is going to the container overlay</h2>'
+        f'<p>These roots resolve to the writable overlay layer{overridden}. On '
+        'TrueNAS this fills the FastPool SSD and is <b>destroyed on the next '
+        'app edit/update</b>:</p>'
+        f'<ul style="margin:8px 0 8px 20px">{rows}</ul>'
+        '<p class="count">Fix: bind-mount each root to a dataset, or set its env '
+        'var under an already-mounted path (see <code>docker/docker-compose.yml</code>). '
+        'Run <code>bin/storage-check.sh</code> in the terminal for details.</p>'
+        '</div>'
+    )
+
 
 # ── pages ─────────────────────────────────────────────────────────────────────
 
@@ -147,9 +183,10 @@ def page_home(root):
     if cached and (time.monotonic() - cached[0]) < _HOME_CACHE_TTL:
         return cached[1]
 
+    storage_banner = storage_warning_banner()
     dbs = find_databases(root)
     if not dbs:
-        body = f"""<div class="panel">
+        body = f"""{storage_banner}<div class="panel">
           <p>No *.analysis.sqlite files found under <code>{h(root)}</code>.</p>
           <p style="margin-top:10px">
             <a href="/images/new" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7"
@@ -203,7 +240,7 @@ def page_home(root):
                 f'</div>'
             )
 
-    body = f"""{mem_panel()}{pipeline_banner}<div class="panel">
+    body = f"""{storage_banner}{mem_panel()}{pipeline_banner}<div class="panel">
       <p class="count" style="display:flex;justify-content:space-between;align-items:center">
         <span>{len(dbs)} image(s) found under <code>{h(root)}</code></span>
         <span>
@@ -628,8 +665,36 @@ def page_db(db_path):
     </div>
     {panel_pipeline(db_path)}
     <div class="panel"><h2>Stage Run History</h2>{runs_html}</div>
+    {panel_reset(db_path)}
     """
     return page(name, body, db_name=db_path, head_extra=head_extra)
+
+
+def panel_reset(db_path):
+    """Render the per-image 'Danger zone — reset' panel for the DB page."""
+    enc = h(db_path)
+    img_name = (query_scalar(db_path, "SELECT image_name FROM image_info WHERE id=1", "")
+                or Path(db_path).name)
+    export_root = db_export_root(db_path)
+    return f"""
+    <div class="panel" style="border-left:5px solid #cc2222;margin-top:18px">
+      <h2 style="color:#ff6b6b">Danger zone &mdash; reset image</h2>
+      <p class="count">Permanently deletes this image's analysis database and its
+        export tree (carving / PhotoRec / recovered output). The raw
+        <code>.img</code> and the ddrescue map are <b>kept</b>. Use this to
+        re-analyse from scratch.</p>
+      <p class="count">Deletes <code>{h(Path(db_path).name)}</code> and
+        <code>{h(export_root or '(export tree)')}</code></p>
+      <form method="post" action="/reset_image"
+            onsubmit="return confirm('Delete the DB and all exports for this image? This cannot be undone.')">
+        <input type="hidden" name="db" value="{enc}">
+        <label>Type the image name <b>{h(img_name)}</b> to confirm:
+          <input type="text" name="confirm" autocomplete="off"
+                 style="margin:0 8px;padding:3px 6px"></label>
+        <button type="submit" style="background:#cc2222;color:#fff;border:none;
+                padding:5px 12px;border-radius:3px;cursor:pointer">Reset image</button>
+      </form>
+    </div>"""
 
 
 # One row per candidate FILE, merging the separate rows that detect-wallets,

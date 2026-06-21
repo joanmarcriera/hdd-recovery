@@ -167,6 +167,10 @@ WORKDIR /root/hdd-recovery
 #    footer so a running container can be matched to a build) ──────────────────
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
+
+# Marker read by lib/storage_guard.py so the overlay-storage guard enforces only
+# inside the container, where an unmounted data root means silent data loss.
+ENV HDD_IN_CONTAINER=1
 LABEL org.opencontainers.image.version="${APP_VERSION}" \
       org.opencontainers.image.source="https://github.com/joanmarcriera/hdd-recovery"
 

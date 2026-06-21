@@ -147,6 +147,13 @@ Every bin script sources this. Key functions:
 | `bin/image-export.sh <db> --file-id <id>` | Copy a specific file to `exports/` |
 | `bin/image-attach-ro.sh` / `bin/image-detach.sh` | Mount/unmount image read-only via loop device |
 
+### Maintenance
+
+| Script | Purpose |
+|--------|---------|
+| `bin/image-reset.sh <db> [--run] [--yes]` | **Destructive full reset** — deletes the `<image>.analysis.sqlite` and the `exports/<image>/` tree so an image can be re-analysed from scratch. **Keeps** the raw `.img` and ddrescue `.map`. Preview by default; `--run` deletes (prompts to type the image name unless `--yes`). Logic in `lib/reset.py`; audit trail in `LOG_ROOT/resets.log`. Refuses while a pipeline/queue is active. Also exposed as a "Danger zone" panel on the `/db` page. |
+| `bin/storage-check.sh` | Reports where each data root (`DB_ROOT`/`EXPORT_ROOT`/`IMAGE_ROOT`/`LOG_ROOT`) actually lands. Inside the container, a root sharing a device with `/` resolved to the writable overlay layer (silent data loss — fills FastPool, discarded on recreate). Exits non-zero on danger. Logic in `lib/storage_guard.py`; enforced at write time by `ensure_db`/`ensure_work_dirs` (override `HDD_ALLOW_OVERLAY=1`) and surfaced as a red banner on the web home page. |
+
 ### Web UI (`bin/image-serve.py`)
 
 Started via the TUI or `python3 bin/image-serve.py --port 7788`. Routes:

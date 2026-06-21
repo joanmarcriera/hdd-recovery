@@ -160,5 +160,35 @@ class TestServeAppDispatch(unittest.TestCase):
         self.assertEqual(h.captured[2]["Location"], "/queue_log?log=/tmp/queue.log")
 
 
+    def test_reset_image_wrong_confirmation_does_not_delete(self):
+        body = urllib.parse.urlencode({"db": self.db, "confirm": "WRONG"})
+        with mock.patch.object(app, "perform_reset") as pr:
+            h = CapturePostHandler("/reset_image", self.tmp.name, body)
+            h.do_POST()
+        pr.assert_not_called()
+        self.assertEqual(h.captured[0:2], ("html", 400))
+        self.assertIn("did not match", h.captured[2])
+
+    def test_reset_image_match_calls_perform_and_reports(self):
+        # image_name in _make_db is "x.img"; confirmation must equal it.
+        body = urllib.parse.urlencode({"db": self.db, "confirm": "x.img"})
+        fake = SimpleNamespace(deleted=[self.db], freed_bytes=4096, audit_log="/x")
+        with mock.patch.object(app, "perform_reset", return_value=fake) as pr:
+            h = CapturePostHandler("/reset_image", self.tmp.name, body)
+            h.do_POST()
+        pr.assert_called_once_with(self.db)
+        self.assertEqual(h.captured[0:2], ("html", 200))
+        self.assertIn("Reset", h.captured[2])
+
+    def test_reset_image_refusal_surfaces_409(self):
+        body = urllib.parse.urlencode({"db": self.db, "confirm": "x.img"})
+        with mock.patch.object(app, "perform_reset",
+                               side_effect=app.ResetError("active writer")):
+            h = CapturePostHandler("/reset_image", self.tmp.name, body)
+            h.do_POST()
+        self.assertEqual(h.captured[0:2], ("html", 409))
+        self.assertIn("active writer", h.captured[2])
+
+
 if __name__ == "__main__":
     unittest.main()
