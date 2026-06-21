@@ -5,7 +5,8 @@
 Backlog-driven recovery-effectiveness improvements. Most reliability work
 (F1–F8) has shipped. The #18 `bin/image-serve.py` maintainability split is now
 complete: the entrypoint is thin and the web UI logic lives in cohesive
-`lib/serve_*.py` modules with focused offline coverage.
+`lib/serve_*.py` modules with focused offline coverage. The current follow-up
+adds an in-app Add image / Help page for operator acquisition guidance.
 
 ## Completed Work (2026-06-20 session)
 
@@ -36,9 +37,18 @@ complete: the entrypoint is thin and the web UI logic lives in cohesive
   parsing/cache/render core), plus the earlier `lib/serve_db.py`,
   `lib/serve_auth.py`, and `lib/serve_mapfile.py`. `bin/image-serve.py`
   re-exports legacy helper names used by tests and older imports.
+- **Operator Add image / Help page** — the web UI home page links to `/help`,
+  which explains the imaging-host vs analysis-container split, source-disk
+  safety checks, graduated `ddrescue` passes, tougher failing-disk alternatives,
+  USB-stick imaging, and the `image-analysis-init.sh` step that makes an image
+  appear in the UI. Route dispatch is covered by `tests/unit/test_serve_app.py`.
 
 ## Tests
 
+- `python3 -m unittest discover -s tests/unit -p test_serve_app.py` — 5 tests,
+  all passing.
+- `./tests/run-unit.sh` — 155 tests, all passing.
+- `git diff --check` — passed.
 - `./tests/run-unit.sh` — 147 tests, all passing (added
   `tests/unit/test_encrypted.py`, `tests/unit/test_wordlist.py`,
   `tests/unit/test_serve_db.py`, `tests/unit/test_serve_queue_log.py`,

@@ -108,6 +108,12 @@ class TestServeAppDispatch(unittest.TestCase):
         self.assertEqual(h.captured[0:2], ("response", 302))
         self.assertEqual(h.captured[2]["Location"], "/")
 
+    def test_help_page_renders_acquisition_guidance(self):
+        kind, status, content = self.dispatch("/help")
+        self.assertEqual((kind, status), ("html", 200))
+        for needle in ("ddrescue", "USB", "image-analysis-init.sh"):
+            self.assertIn(needle, content)
+
 
 if __name__ == "__main__":
     unittest.main()

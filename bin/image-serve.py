@@ -85,6 +85,7 @@ from lib.serve_pages import (  # noqa: E402,F401
     page_db,
     page_files,
     page_findings,
+    page_help,
     page_home,
     page_mapview,
     page_pictures,

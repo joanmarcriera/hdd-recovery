@@ -197,8 +197,12 @@ def page_home(root):
     body = f"""{mem_panel()}{pipeline_banner}<div class="panel">
       <p class="count" style="display:flex;justify-content:space-between;align-items:center">
         <span>{len(dbs)} image(s) found under <code>{h(root)}</code></span>
-        <a href="/queue" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7"
-           title="Queue fast/carve/etc. across multiple images">&#9654; Queue work</a>
+        <span>
+          <a href="/help" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7;margin-right:6px"
+             title="How to acquire a new disk image (ddrescue, failing disks, USB) and register it here">&#43; Add image / Help</a>
+          <a href="/queue" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7"
+             title="Queue fast/carve/etc. across multiple images">&#9654; Queue work</a>
+        </span>
       </p>
       <table style="margin-top:10px">
         <tr><th>Image</th><th>Size</th>
@@ -1076,3 +1080,191 @@ def page_mapview(map_path, db_path=""):
     <div class="panel"><h2>Coverage Statistics</h2>{stats_html}</div>
     """
     return page("ddrescue Map View", body, db_name=db_path, nav_extra=" &rsaquo; mapview")
+
+
+_HELP_HEAD = """<style>
+.help h2{border-bottom:1px solid var(--accent);padding-bottom:4px;margin-top:22px}
+.help pre{background:#0d1117;border:1px solid var(--accent);border-radius:6px;
+  padding:10px 12px;overflow:auto;font-size:12px;line-height:1.5;white-space:pre;margin:8px 0}
+.help code{background:#0d1117;border:1px solid #2a2a4a;border-radius:3px;padding:1px 5px}
+.help li{margin:5px 0 5px 22px}
+.help .warn{border-left:4px solid var(--hi);padding:8px 12px;background:#2a1622;
+  border-radius:0 4px 4px 0;margin:10px 0}
+.help .ok-note{border-left:4px solid #1e4620;padding:8px 12px;background:#10210f;
+  border-radius:0 4px 4px 0;margin:10px 0}
+.help table td{vertical-align:top}
+</style>"""
+
+
+def page_help(root=""):
+    """Operator guide: how to acquire a new disk image and register it here."""
+    body = """
+<div class="help">
+
+<div class="panel">
+  <h2 style="margin-top:0;border:0">Two machines, one destination disk</h2>
+  <p>Imaging and analysis run in <b>different places</b>:</p>
+  <ul>
+    <li><b>optiplex990 (imaging host)</b> &mdash; has the recovery tools
+        (<code>ddrescue</code>, <code>hddsuperclone</code>, <code>safecopy</code>&hellip;)
+        and the source disks physically attached. <b>You run all the commands on
+        this page here.</b></li>
+    <li><b>This container (analysis / web UI)</b> &mdash; never touches a source
+        disk. It only reads finished <code>.img</code> files and their analysis
+        databases under <code>__ROOT__</code>.</li>
+  </ul>
+  <p>The bridge is the <b>16&nbsp;TB destination</b>
+     (<code>/mnt/recovery16tb/recovery/</code>): imaging writes the
+     <code>.img</code> + <code>.map</code> there, and this UI reads them back. An
+     image only appears on the home page once its
+     <code>&lt;image&gt;.analysis.sqlite</code> exists beside it (see step 4).</p>
+</div>
+
+<div class="warn">
+  <b>Safety (non-negotiable).</b>
+  <ul style="margin-top:4px">
+    <li>Never write to a source disk; never mount a source <b>read-write</b>.</li>
+    <li>Identify the disk by <b>model + serial + by-path</b> before touching it &mdash;
+        not by <code>/dev/sdX</code> alone (it changes between boots).</li>
+    <li>Do not start a SMART self-test while imaging.</li>
+    <li>Write images only to the 16&nbsp;TB destination, never back onto a source.</li>
+  </ul>
+</div>
+
+<div class="panel">
+  <h2 style="margin-top:0;border:0">On optiplex990 (this imaging host)</h2>
+  <ul>
+    <li>The repo lives at <code>~/hdd-recovery</code>, not <code>/root/hdd-recovery</code>.
+        Export <code>HDD_RECOVERY_ROOT=$HOME/hdd-recovery</code> before running any
+        <code>bin/</code> script, or they fail sourcing <code>lib/common.sh</code>.</li>
+    <li>Images land on the <b>DATA1</b> disk (<code>/dev/sdc1</code>, ext4) mounted at
+        <code>/data</code>: <code>/data/images</code> (img), <code>/data/logs</code>
+        (mapfiles), <code>/data/db</code> (analysis DBs), <code>/data/exports</code>.
+        If it is not mounted: <code>sudo mount /dev/sdc1 /data</code>.</li>
+    <li><b>Never touch <code>sdb</code> or <code>sdd</code></b> &mdash; 14.6&nbsp;TB XFS
+        <code>mfschunks*</code> MooseFS cluster disks. Only the USB/SATA <i>source</i>
+        disks you attach are imaging targets.</li>
+    <li><code>hddsuperclone</code> and <code>safecopy</code> are not installed here;
+        <code>sudo apt install</code> them only if a drive is badly failing.</li>
+  </ul>
+</div>
+
+<h2>1. Identify the source disk</h2>
+<pre>lsblk -o NAME,PATH,SIZE,TYPE,FSTYPE,LABEL,MODEL,SERIAL,TRAN,ROTA,STATE
+ls -l /dev/disk/by-path           # stable path that survives reboots
+sudo smartctl -a /dev/sdX         # health (read-only)  -- do NOT run a self-test
+sudo hdparm -I /dev/sdX           # model/serial/sector size</pre>
+<p>If the stick/disk auto-mounted, unmount it first &mdash; do not remount writable:</p>
+<pre>sudo umount /dev/sdX1   # repeat per partition; leave the source untouched after</pre>
+<p class="count"><b>Reality checks.</b> USB flash sticks usually do <b>not</b> expose
+   SMART through the bridge (<code>smartctl</code> reports &ldquo;Unknown USB
+   bridge&rdquo;) &mdash; that is normal, skip the health check for them. And if
+   you plugged in N drives but <code>lsblk</code> shows fewer, the missing one did
+   not enumerate: reseat it, try another port/cable, then check
+   <code>dmesg | tail</code> for whether the kernel saw it at all.</p>
+
+<h2>2. Failing disk &mdash; ddrescue, graduated intensity</h2>
+<p>This is the important one. ddrescue copies in <b>passes that get more
+   aggressive</b>: grab everything that reads easily and cheaply first (so a dying
+   disk spends its remaining life on data, not on retrying bad sectors), then
+   close in on the damaged zones. The <b>mapfile</b> records progress, so every
+   pass resumes where the last stopped &mdash; never restart from zero.</p>
+
+<h3>Option A &mdash; using the repo job-config workflow (recommended)</h3>
+<pre>cd ~/hdd-recovery                                   # the repo on optiplex990
+cp bin/ddrescue-job-template.conf jobs/mydisk.conf  # then fill SOURCE_DEV,
+                                                    # SOURCE_MODEL, SERIAL, BASENAME
+
+bin/ddrescue-run.sh jobs/mydisk.conf first          # PREVIEW (prints the command)
+bin/ddrescue-run.sh jobs/mydisk.conf first  --run   # execute first pass
+bin/ddrescue-status.sh /mnt/recovery16tb/recovery/logs/&lt;basename&gt;.map
+
+# only if unread areas remain, escalate one pass at a time:
+bin/ddrescue-run.sh jobs/mydisk.conf retry   --run
+bin/ddrescue-run.sh jobs/mydisk.conf reverse --run
+bin/ddrescue-run.sh jobs/mydisk.conf retrim  --run</pre>
+
+<h3>Option B &mdash; raw ddrescue (same phases, by hand)</h3>
+<pre>SRC=/dev/sdX
+IMG=/mnt/recovery16tb/recovery/images/mydisk.img
+MAP=/mnt/recovery16tb/recovery/logs/mydisk.map
+
+# 1) First pass: fast + gentle. -n skips the slow scrape phase, -p preallocates,
+#    so only the easy, healthy blocks are read this time.
+sudo ddrescue -n -p -v --log-events=mydisk.events.log --log-rates=mydisk.rates.log "$SRC" "$IMG" "$MAP"
+
+# 2) See what is left (rescued / non-tried / bad).
+sudo ddrescuelog -t "$MAP"
+
+# 3) Retry pass: now attack the hard areas. -d direct I/O, -r3 three retries,
+#    -O reopen the device on error, brief pause so the drive can recover.
+sudo ddrescue -d -r3 -O --pause-on-error=1s -v "$SRC" "$IMG" "$MAP"
+
+# 4) Reverse pass: approach bad zones from the other end (-R).
+sudo ddrescue -d -r1 -O -R -v "$SRC" "$IMG" "$MAP"
+
+# 5) Retrim: re-attempt previously trimmed bad areas (-M), last and most aggressive.
+sudo ddrescue -d -r1 -O -M -v "$SRC" "$IMG" "$MAP"</pre>
+<p class="count">Add <code>-b 4096</code> for 4K-native drives. Keep the same
+   <code>$MAP</code> across every pass &mdash; that is what makes them cumulative.</p>
+
+<h2>3. Tougher cases &mdash; other tools</h2>
+<p>When ddrescue stalls, the disk keeps dropping off the bus, or you want a second
+   opinion, switch tools but keep the same gentle-first strategy. All are on
+   optiplex990.</p>
+<table>
+  <tr><th>Tool</th><th>When / how</th></tr>
+  <tr><td><b>HDDSuperClone</b></td>
+      <td>Very sick drives: talks over direct ATA/USB, handles drives that
+          reset or vanish mid-read, and can resume into a ddrescue-compatible
+          map. Reach for it when ddrescue can't keep the disk alive.
+          <pre>sudo hddsuperclone   # GUI/curses; point it at /dev/sdX -&gt; the .img</pre></td></tr>
+  <tr><td><b>safecopy</b></td>
+      <td>Staged, increasingly aggressive low-level retries &mdash; good as an
+          independent second pass over what ddrescue left behind.
+          <pre>sudo safecopy --stage1 /dev/sdX mydisk.img   # fast, skip bad
+sudo safecopy --stage2 /dev/sdX mydisk.img   # closer
+sudo safecopy --stage3 /dev/sdX mydisk.img   # most aggressive</pre></td></tr>
+  <tr><td><b>dd_rescue + dd_rhelp</b></td>
+      <td>Older alternative; <code>dd_rhelp</code> wraps <code>dd_rescue</code> to
+          copy good areas first, then close in on the bad ones.
+          <pre>sudo dd_rhelp /dev/sdX mydisk.img mydisk.log</pre></td></tr>
+  <tr><td><b>myrescue</b></td>
+      <td>Same good-first / bad-later idea, resumable via its own block log.
+          <pre>sudo myrescue -b 4096 /dev/sdX mydisk.img</pre></td></tr>
+  <tr><td><b>ddrescuelog</b></td>
+      <td>Inspect/convert the mapfile: <code>-t</code> totals,
+          <code>-l</code> list block ranges by status, mark/clear regions.</td></tr>
+</table>
+
+<h2>4. USB stick / external drive</h2>
+<pre># Identify it first -- match the size + model, don't grab the wrong /dev/sdX.
+lsblk -o NAME,PATH,SIZE,MODEL,SERIAL,TRAN,MOUNTPOINT
+
+# Healthy stick -- a straight image is fine:
+sudo ddrescue -f -n /dev/sdX /mnt/recovery16tb/recovery/images/usbkey.img \
+  /mnt/recovery16tb/recovery/logs/usbkey.map
+
+# Plain dd is OK for HEALTHY media only (no error tolerance, no resume):
+sudo dd if=/dev/sdX of=/mnt/recovery16tb/recovery/images/usbkey.img \
+  bs=4M conv=noerror,sync status=progress
+
+# Flaky stick? Use the full graduated ddrescue passes from section 2 instead.</pre>
+
+<h2>5. Make the image appear in this UI</h2>
+<p>Run these <b>where this container can see the image</b> (the <code>.img</code>
+   must be under <code>__ROOT__</code> / the mounted destination):</p>
+<pre>bin/image-analysis-init.sh /mnt/recovery16tb/recovery/images/mydisk.img \
+  --map /mnt/recovery16tb/recovery/logs/mydisk.map --hash
+bin/image-process.sh /mnt/recovery16tb/recovery/images/mydisk.img   # fast metadata pass</pre>
+<div class="ok-note">
+  Creating <code>mydisk.img.analysis.sqlite</code> beside the image is what makes
+  it show up on the <a href="/">home page</a>. Once the <code>.img</code> is
+  present you can also just hit <a href="/queue">Queue work</a> and let the UI
+  drive the analysis stages.
+</div>
+
+</div>
+"""
+    body = body.replace("__ROOT__", h(root or "(IMAGE_ROOT)"))
+    return page("Add Images / Help", body, nav_extra=" &rsaquo; help", head_extra=_HELP_HEAD)

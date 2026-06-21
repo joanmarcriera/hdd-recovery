@@ -39,6 +39,7 @@ from lib.serve_pages import (  # noqa: E402
     page_db,
     page_files,
     page_findings,
+    page_help,
     page_home,
     page_mapview,
     page_pictures,
@@ -181,6 +182,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             if p == "/":
                 self.send_html(page_home(self.root))
+            elif p == "/help":
+                self.send_html(page_help(self.root))
             elif p == "/db":
                 self.send_html(page_db(db))
             elif p == "/wallets":

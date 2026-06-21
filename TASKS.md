@@ -79,6 +79,12 @@
     Legacy helper names are re-exported by `bin/image-serve.py` for tests and
     existing imports. Suite green at 147 tests.
 
+- [x] Operator Add image / Help page. (2026-06-21)
+  - Completion criteria: the home page exposes an Add image / Help link; `/help`
+    renders source-disk safety, `ddrescue`, USB, and analysis-init guidance; route
+    dispatch is covered by `tests/unit/test_serve_app.py`; `./tests/run-unit.sh`
+    passes.
+
 ## Next
 
 - [ ] Push local commits when ready, then select the next backlog item from
