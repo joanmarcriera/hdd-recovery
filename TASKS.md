@@ -85,6 +85,13 @@
     dispatch is covered by `tests/unit/test_serve_app.py`; `./tests/run-unit.sh`
     passes.
 
+- [x] Scan for new images web workflow. (2026-06-21)
+  - Completion criteria: the home page exposes a Scan for new images button;
+    `/images/new` discovers finished `*.img` files in legacy and split storage
+    layouts, previews image/map/DB paths, initializes selected missing DBs via
+    `image-analysis-init.sh`, can start the existing `fast` preset through the
+    supervised queue with `skip-done`, and focused/full unit tests pass.
+
 ## Next
 
 - [ ] Push local commits when ready, then select the next backlog item from

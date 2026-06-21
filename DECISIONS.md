@@ -1,5 +1,42 @@
 # Decisions
 
+## 2026-06-21 — Web UI Registers Images, Then Queues the Existing Fast Pipeline
+
+**Decision:** The web UI handles new finished images through `/images/new`.
+Discovery and registration live in `lib/serve_images.py`, separate from the
+read-only DB helpers. The page discovers `*.img` files in both legacy
+beside-image layouts and the split `/data/images` + `/data/db` Docker layout,
+infers a matching ddrescue mapfile, and calls `image-analysis-init.sh` with an
+explicit `--db` path. The "Initialize + start fast scan" action starts one
+sequential supervised queue using the existing `fast` preset with `--skip-done`.
+
+**Alternatives considered:**
+
+- Keep only the help page and require operators to type `image-analysis-init.sh`.
+- Run `image-process.sh` synchronously from the HTTP request.
+- Start one detached pipeline per discovered image.
+
+**Rationale:** The manual command path was error-prone, and a typo such as
+prefixing it with `ls` fails before any useful work happens. Running the fast
+stages through the existing queue preserves current supervision, logging,
+cancel/stop-after-stage behavior, and the rule that DB-writing stages should not
+be started blindly in parallel. Passing `--db` explicitly prevents shell config
+defaults from moving the DB to a different layout than the UI is showing.
+
+**Consequences:**
+
+- The scan page is write-capable by design; keep other SQL browse helpers
+  read-only.
+- Image hashing is intentionally omitted from the web request so registering a
+  large disk does not block on a full-image read.
+- Existing registered images can be selected too; the queue runs with
+  `skip-done`, so already-completed fast stages are skipped.
+
+**Revisit if:**
+
+- Operators need hash calculation as a detached supervised job.
+- The project adds a central inventory DB that can replace layout inference.
+
 ## 2026-06-20 — Web UI Split Keeps a Compatibility Entrypoint
 
 **Decision:** #18 splits the former `bin/image-serve.py` monolith into domain

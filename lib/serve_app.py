@@ -32,7 +32,9 @@ from lib.serve_gallery import (  # noqa: E402
     page_gallery,
     page_gallery_fs,
 )
+from lib.serve_images import discover_images, initialize_image_catalog  # noqa: E402
 from lib.serve_pages import (  # noqa: E402
+    _HOME_CACHE,
     _queue_progress_html,
     page_artifacts,
     page_bulk_hits,
@@ -41,6 +43,7 @@ from lib.serve_pages import (  # noqa: E402
     page_findings,
     page_help,
     page_home,
+    page_new_images,
     page_mapview,
     page_pictures,
     page_queue,
@@ -184,6 +187,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_html(page_home(self.root))
             elif p == "/help":
                 self.send_html(page_help(self.root))
+            elif p == "/images/new":
+                self.send_html(page_new_images(self.root))
             elif p == "/db":
                 self.send_html(page_db(db))
             elif p == "/wallets":
@@ -439,6 +444,95 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_response(302)
             self.send_header("Location", f'/queue_log?log={urllib.parse.quote(log_path)}')
             self.end_headers()
+        elif p == "/images/new":
+            selected = params.get("image", [])
+            action = pval("action", "init")
+            if action not in ("init", "init_fast"):
+                self.send_html(page_new_images(self.root, error="Unknown action."), 400)
+                return
+            if not selected:
+                self.send_html(
+                    page_new_images(self.root, error="Select at least one image."),
+                    400,
+                )
+                return
+
+            candidates = {c.image_path: c for c in discover_images(self.root)}
+            dbs = []
+            initialized = []
+            errors = []
+            for image_path in selected:
+                candidate = candidates.get(image_path)
+                if candidate is None:
+                    errors.append(f"not a discovered image: {image_path}")
+                    continue
+                if candidate.registered and os.path.isfile(candidate.db_path):
+                    dbs.append(candidate.db_path)
+                    continue
+                try:
+                    db_path = initialize_image_catalog(candidate)
+                except Exception as e:
+                    errors.append(f"{Path(image_path).name}: {e}")
+                    continue
+                dbs.append(db_path)
+                initialized.append(db_path)
+
+            _HOME_CACHE.pop(self.root, None)
+            init_notice = (f"Initialized {len(initialized)} image(s)."
+                           if initialized else "No new DBs were needed.")
+
+            if errors:
+                self.send_html(
+                    page_new_images(
+                        self.root,
+                        notice=init_notice if initialized else "",
+                        error="; ".join(errors),
+                    ),
+                    500 if not dbs else 200,
+                )
+                return
+
+            if action == "init_fast":
+                if queue_active(self.root)[0]:
+                    self.send_html(
+                        page_new_images(
+                            self.root,
+                            notice=init_notice,
+                            error="A queue is already running; fast scan was not started.",
+                        ),
+                        409,
+                    )
+                    return
+                try:
+                    log_path, _pid = spawn_queue(
+                        self.root,
+                        dbs,
+                        ["fast"],
+                        jobs=1,
+                        skip_done=True,
+                        keep_going=True,
+                    )
+                except Exception as e:
+                    self.send_html(
+                        page_new_images(
+                            self.root,
+                            notice=init_notice,
+                            error=f"fast scan queue failed: {e}",
+                        ),
+                        500,
+                    )
+                    return
+                self.send_response(302)
+                self.send_header("Location", f'/queue_log?log={urllib.parse.quote(log_path)}')
+                self.end_headers()
+                return
+
+            self.send_html(
+                page_new_images(
+                    self.root,
+                    notice=init_notice,
+                )
+            )
         elif p == "/cancel_queue":
             cancel_active_queue(self.root)
             self.send_response(302)

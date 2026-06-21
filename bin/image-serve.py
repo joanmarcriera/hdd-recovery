@@ -45,6 +45,13 @@ from lib.serve_gallery import (  # noqa: E402,F401
     page_gallery,
     page_gallery_fs,
 )
+from lib.serve_images import (  # noqa: E402,F401
+    ImageCandidate,
+    discover_images,
+    find_matching_map,
+    image_roots,
+    initialize_image_catalog,
+)
 from lib.serve_mapfile import (  # noqa: E402
     MAP_STATUS as _MAP_STATUS,
     map_svg as _map_svg,
@@ -87,6 +94,7 @@ from lib.serve_pages import (  # noqa: E402,F401
     page_findings,
     page_help,
     page_home,
+    page_new_images,
     page_mapview,
     page_pictures,
     page_queue,

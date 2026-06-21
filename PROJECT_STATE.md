@@ -6,9 +6,10 @@ Backlog-driven recovery-effectiveness improvements. Most reliability work
 (F1–F8) has shipped. The #18 `bin/image-serve.py` maintainability split is now
 complete: the entrypoint is thin and the web UI logic lives in cohesive
 `lib/serve_*.py` modules with focused offline coverage. The current follow-up
-adds an in-app Add image / Help page for operator acquisition guidance.
+adds an in-app scan/register workflow for finished `.img` files so operators no
+longer have to type the initial `image-analysis-init.sh` command by hand.
 
-## Completed Work (2026-06-20 session)
+## Completed Work (2026-06-20/21 sessions)
 
 - **#7 encrypted-container detection** — new stage `detect-encrypted`
   (`bin/image-detect-encrypted-containers.sh`). Parses the image partition table
@@ -42,11 +43,25 @@ adds an in-app Add image / Help page for operator acquisition guidance.
   safety checks, graduated `ddrescue` passes, tougher failing-disk alternatives,
   USB-stick imaging, and the `image-analysis-init.sh` step that makes an image
   appear in the UI. Route dispatch is covered by `tests/unit/test_serve_app.py`.
+- **Scan for new images web flow** — the home page links to `/images/new`.
+  `lib/serve_images.py` discovers finished `*.img` files across both legacy
+  beside-image storage and the split `/data/images` + `/data/db` Docker layout,
+  infers matching ddrescue mapfiles, initializes missing analysis DBs via
+  `image-analysis-init.sh --db ... --print-db-path`, and can queue the existing
+  `fast` preset sequentially through the supervised queue runner. Help text now
+  points operators to the scan page and shows the corrected manual fallback.
 
 ## Tests
 
 - `python3 -m unittest discover -s tests/unit -p test_serve_app.py` — 5 tests,
   all passing.
+- `python3 -m unittest discover -s tests/unit -p 'test_serve*.py'` — 46 tests,
+  all passing.
+- `python3 -m py_compile bin/image-serve.py lib/serve_app.py lib/serve_pages.py
+  lib/serve_images.py tests/unit/test_serve_app.py
+  tests/unit/test_serve_images.py` — passed.
+- `./tests/run-unit.sh` — 160 tests, all passing.
+- `git diff --check` — passed.
 - `./tests/run-unit.sh` — 155 tests, all passing.
 - `git diff --check` — passed.
 - `./tests/run-unit.sh` — 147 tests, all passing (added

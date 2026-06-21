@@ -16,6 +16,7 @@ import urllib.parse
 from pathlib import Path
 
 from lib.serve_db import find_databases, query_scalar, run_query
+from lib.serve_images import discover_images, image_roots
 from lib.serve_mapfile import MAP_STATUS as _MAP_STATUS, map_svg as _map_svg, parse_mapfile
 from lib.serve_pipeline import (
     PIPELINE_PRESETS,
@@ -148,7 +149,15 @@ def page_home(root):
 
     dbs = find_databases(root)
     if not dbs:
-        body = f'<div class="panel"><p>No *.analysis.sqlite files found under <code>{h(root)}</code>.</p></div>'
+        body = f"""<div class="panel">
+          <p>No *.analysis.sqlite files found under <code>{h(root)}</code>.</p>
+          <p style="margin-top:10px">
+            <a href="/images/new" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7"
+               title="Find finished .img files, initialise missing DBs, and optionally start the fast scan">
+               Scan for new images</a>
+            &nbsp; <a href="/help">Add image / Help</a>
+          </p>
+        </div>"""
         return page("Recovery Dashboard", body)
 
     rows_html = ""
@@ -198,6 +207,8 @@ def page_home(root):
       <p class="count" style="display:flex;justify-content:space-between;align-items:center">
         <span>{len(dbs)} image(s) found under <code>{h(root)}</code></span>
         <span>
+          <a href="/images/new" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7;margin-right:6px"
+             title="Find finished .img files, initialise missing DBs, and optionally start the fast scan">Scan for new images</a>
           <a href="/help" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7;margin-right:6px"
              title="How to acquire a new disk image (ddrescue, failing disks, USB) and register it here">&#43; Add image / Help</a>
           <a href="/queue" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7"
@@ -216,6 +227,85 @@ def page_home(root):
     html_out = page("Recovery Dashboard", body, head_extra=head_extra)
     _HOME_CACHE[root] = (time.monotonic(), html_out)
     return html_out
+
+
+def page_new_images(root, notice="", error=""):
+    """GET /images/new — discover finished .img files and register missing DBs."""
+    candidates = discover_images(root)
+    roots = image_roots(root)
+    roots_html = "".join(f"<li><code>{h(r)}</code></li>" for r in roots)
+    if not roots_html:
+        roots_html = "<li>No readable image roots found.</li>"
+
+    notice_html = (f'<div class="panel" style="border-left:4px solid #1e4620">'
+                   f'{h(notice)}</div>') if notice else ""
+    error_html = f'<div class="panel err">{h(error)}</div>' if error else ""
+
+    rows = ""
+    for c in candidates:
+        status = ('<span class="badge ok">registered</span>' if c.registered
+                  else '<span class="badge pending">new</span>')
+        checked = " checked" if not c.registered else ""
+        map_cell = (f'<code>{h(c.map_path)}</code>' if c.map_path
+                    else '<span class="count">not found</span>')
+        db_note = "registered" if c.registered else "will create"
+        rows += f"""<tr>
+          <td style="text-align:center">
+            <input type="checkbox" name="image" value="{h(c.image_path)}"{checked}>
+          </td>
+          <td>{status}</td>
+          <td><code>{h(c.image_path)}</code></td>
+          <td style="white-space:nowrap">{h(_human_size(c.size_bytes))}</td>
+          <td>{map_cell}</td>
+          <td><span class="count">{h(db_note)}</span><br><code>{h(c.db_path)}</code></td>
+        </tr>"""
+
+    if rows:
+        table = f"""
+        <form method="post" action="/images/new" style="display:block">
+          <div style="overflow-x:auto"><table>
+            <tr><th>Use</th><th>Status</th><th>Image</th><th>Size</th><th>Map</th><th>Database</th></tr>
+            {rows}
+          </table></div>
+          <p class="count" style="margin-top:8px">
+            Missing DBs are checked by default. Existing DBs can also be selected
+            if you want to queue the fast scan with skip-done enabled.
+          </p>
+          <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+            <button type="submit" name="action" value="init">Initialize selected</button>
+            <button type="submit" name="action" value="init_fast">Initialize + start fast scan</button>
+          </div>
+        </form>
+        """
+    else:
+        table = '<p class="count">No <code>*.img</code> files were found in the image roots above.</p>'
+
+    body = f"""
+    {notice_html}{error_html}
+    <div class="panel">
+      <h2>Scan for New Images</h2>
+      <p class="count">
+        This scans finished raw images only. It never mounts or writes to source
+        disks. The fast scan is queued sequentially and runs
+        <code>structure-scan</code>, <code>index-tsk</code>,
+        <code>detect-wallets</code>, and <code>detect-pictures</code>.
+      </p>
+      <p class="count" style="margin-top:8px">
+        Image hashing is not run from this page so the HTTP request does not
+        block on a full-disk read; run <code>image-analysis-init.sh --hash</code>
+        later if you need a SHA256 recorded.
+      </p>
+    </div>
+    <div class="panel">
+      <h2>Image roots</h2>
+      <ul style="margin-left:20px">{roots_html}</ul>
+    </div>
+    <div class="panel">
+      <h2>Discovered images ({len(candidates)})</h2>
+      {table}
+    </div>
+    """
+    return page("Scan for New Images", body, nav_extra=" &rsaquo; scan images")
 
 
 def page_queue(root):
@@ -1252,16 +1342,18 @@ sudo dd if=/dev/sdX of=/mnt/recovery16tb/recovery/images/usbkey.img \
 # Flaky stick? Use the full graduated ddrescue passes from section 2 instead.</pre>
 
 <h2>5. Make the image appear in this UI</h2>
-<p>Run these <b>where this container can see the image</b> (the <code>.img</code>
-   must be under <code>__ROOT__</code> / the mounted destination):</p>
-<pre>bin/image-analysis-init.sh /mnt/recovery16tb/recovery/images/mydisk.img \
-  --map /mnt/recovery16tb/recovery/logs/mydisk.map --hash
-bin/image-process.sh /mnt/recovery16tb/recovery/images/mydisk.img   # fast metadata pass</pre>
+<p>Once the <code>.img</code> and optional <code>.map</code> are visible to this UI,
+   use <a href="/images/new">Scan for new images</a>. It creates any missing
+   analysis DBs and can queue the fast metadata pass for you.</p>
+<p>If you need to do it by hand, run the script directly (not <code>ls</code>):</p>
+<pre>DB="$(bin/image-analysis-init.sh /mnt/recovery16tb/recovery/images/mydisk.img \
+  --map /mnt/recovery16tb/recovery/logs/mydisk.map --print-db-path)"
+bin/image-pipeline.py "$DB" --run --skip-done --preset fast</pre>
 <div class="ok-note">
-  Creating <code>mydisk.img.analysis.sqlite</code> beside the image is what makes
-  it show up on the <a href="/">home page</a>. Once the <code>.img</code> is
-  present you can also just hit <a href="/queue">Queue work</a> and let the UI
-  drive the analysis stages.
+  Creating an <code>*.analysis.sqlite</code> catalog is what makes the image show
+  up on the <a href="/">home page</a>. The scan page infers the right DB
+  location for either the legacy beside-image layout or the split
+  <code>/data/images</code> + <code>/data/db</code> Docker layout.
 </div>
 
 </div>

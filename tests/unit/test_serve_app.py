@@ -5,6 +5,9 @@ import sqlite3
 import tempfile
 import unittest
 import urllib.parse
+from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 from _loader import REPO_ROOT, load_module
 
@@ -113,6 +116,48 @@ class TestServeAppDispatch(unittest.TestCase):
         self.assertEqual((kind, status), ("html", 200))
         for needle in ("ddrescue", "USB", "image-analysis-init.sh"):
             self.assertIn(needle, content)
+
+    def test_new_images_route_renders_discovered_image(self):
+        images = os.path.join(self.tmp.name, "images")
+        os.makedirs(images)
+        image = os.path.join(images, "fresh.img")
+        Path(image).write_bytes(b"data")
+
+        kind, status, content = self.dispatch("/images/new")
+        self.assertEqual((kind, status), ("html", 200))
+        self.assertIn("Scan for New Images", content)
+        self.assertIn("fresh.img", content)
+
+    def test_post_new_images_initializes_and_starts_fast_queue(self):
+        image = os.path.join(self.tmp.name, "images", "fresh.img")
+        db = os.path.join(self.tmp.name, "fresh.img.analysis.sqlite")
+        candidate = SimpleNamespace(
+            image_path=image,
+            registered=False,
+            db_path=db,
+        )
+        body = urllib.parse.urlencode({
+            "image": image,
+            "action": "init_fast",
+        })
+        with mock.patch.object(app, "discover_images", return_value=[candidate]), \
+             mock.patch.object(app, "initialize_image_catalog", return_value=db) as init, \
+             mock.patch.object(app, "queue_active", return_value=(None, None)), \
+             mock.patch.object(app, "spawn_queue", return_value=("/tmp/queue.log", 123)) as spawn:
+            h = CapturePostHandler("/images/new", self.tmp.name, body)
+            h.do_POST()
+
+        init.assert_called_once_with(candidate)
+        spawn.assert_called_once_with(
+            self.tmp.name,
+            [db],
+            ["fast"],
+            jobs=1,
+            skip_done=True,
+            keep_going=True,
+        )
+        self.assertEqual(h.captured[0:2], ("response", 302))
+        self.assertEqual(h.captured[2]["Location"], "/queue_log?log=/tmp/queue.log")
 
 
 if __name__ == "__main__":
