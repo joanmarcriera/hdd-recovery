@@ -92,12 +92,17 @@
     `image-analysis-init.sh`, can start the existing `fast` preset through the
     supervised queue with `skip-done`, and focused/full unit tests pass.
 
+- [x] Fix scan-for-images deployment omission. (2026-06-21)
+  - Completion criteria: `lib/serve_images.py` is tracked so Docker builds
+    include it; a regression test fails if a serve UI `lib.*` import points at
+    an untracked local module; unit tests and `git diff --check` pass.
+
 ## Next
 
-- [ ] Push local commits when ready, then select the next backlog item from
-  `IMPROVEMENTS.md`.
-  - Completion criteria: `git status --short --branch` shows no local commits
-    ahead of `origin/main`, or the next selected backlog item is recorded here.
+- [ ] Push the deployment-regression fix and redeploy the container.
+  - Completion criteria: the running container no longer logs
+    `ModuleNotFoundError: No module named 'lib.serve_images'`, and `/images/new`
+    renders.
 
 ## Backlog
 

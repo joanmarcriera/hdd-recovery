@@ -7,7 +7,10 @@ Backlog-driven recovery-effectiveness improvements. Most reliability work
 complete: the entrypoint is thin and the web UI logic lives in cohesive
 `lib/serve_*.py` modules with focused offline coverage. The current follow-up
 adds an in-app scan/register workflow for finished `.img` files so operators no
-longer have to type the initial `image-analysis-init.sh` command by hand.
+longer have to type the initial `image-analysis-init.sh` command by hand. The
+deployment regression from commit `8ae8f74` is fixed: the imported
+`lib/serve_images.py` module is now tracked, and a unit test guards serve UI
+imports against untracked local modules.
 
 ## Completed Work (2026-06-20/21 sessions)
 
@@ -50,6 +53,12 @@ longer have to type the initial `image-analysis-init.sh` command by hand.
   `image-analysis-init.sh --db ... --print-db-path`, and can queue the existing
   `fast` preset sequentially through the supervised queue runner. Help text now
   points operators to the scan page and shows the corrected manual fallback.
+- **Deployment regression fix** — `8ae8f74` imported `lib.serve_images` from
+  tracked files but omitted the new module from git, so Docker builds crashed
+  the web UI with `ModuleNotFoundError`. `lib/serve_images.py` and
+  `tests/unit/test_serve_images.py` are now tracked, and
+  `tests/unit/test_tracked_imports.py` asserts serve UI local `lib.*` imports
+  resolve to files included by `git ls-files`.
 
 ## Tests
 
@@ -62,6 +71,8 @@ longer have to type the initial `image-analysis-init.sh` command by hand.
   tests/unit/test_serve_images.py` — passed.
 - `./tests/run-unit.sh` — 160 tests, all passing.
 - `git diff --check` — passed.
+- `python3 -m unittest discover -s tests/unit -p 'test_tracked_imports.py'` —
+  passed after staging the new module and tests.
 - `./tests/run-unit.sh` — 155 tests, all passing.
 - `git diff --check` — passed.
 - `./tests/run-unit.sh` — 147 tests, all passing (added
@@ -82,8 +93,8 @@ longer have to type the initial `image-analysis-init.sh` command by hand.
 
 ## Next Recommended Action
 
-No active #18 work remains. Next exact action is to push the two local commits
-when desired, then choose the next backlog item from `IMPROVEMENTS.md`.
+Push the deployment-regression fix commit, rebuild/redeploy the container, then
+verify the web UI no longer crash-loops and `/images/new` renders.
 
 ## Known Blockers
 
