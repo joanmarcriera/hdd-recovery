@@ -18,8 +18,12 @@ Progress is tracked in scan_runs.  Interrupt with Ctrl-C; re-run to resume.
 """
 
 import argparse, base64, concurrent.futures, json, os, sqlite3, sys, time, urllib.request, urllib.error
-from datetime import datetime, timezone
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from lib.timestamp import utc_now  # noqa: E402
 
 STAGE = "llava-tag-photos"
 DEFAULT_PROMPT = (
@@ -50,12 +54,8 @@ CREATE INDEX IF NOT EXISTS idx_findings_key      ON findings(key);
 """
 
 
-def now_iso():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def log(msg):
-    print(f"[{now_iso()}] {msg}", flush=True)
+    print(f"[{utc_now()}] {msg}", flush=True)
 
 
 def parse_ollama_urls(cli_value, env=os.environ):
@@ -98,7 +98,7 @@ def record_start(conn, scope, min_size, limit, model, ollama_urls, workers):
            + (f" --limit {limit}" if limit else ""))
     cur = conn.execute(
         "INSERT INTO scan_runs (stage, status, started_at, command_line) VALUES (?,?,?,?)",
-        (STAGE, "running", now_iso(), cmd),
+        (STAGE, "running", utc_now(), cmd),
     )
     conn.commit()
     return cur.lastrowid
@@ -107,7 +107,7 @@ def record_start(conn, scope, min_size, limit, model, ollama_urls, workers):
 def record_end(conn, run_id, status, notes=""):
     conn.execute(
         "UPDATE scan_runs SET status=?, ended_at=?, notes=? WHERE id=?",
-        (status, now_iso(), notes, run_id),
+        (status, utc_now(), notes, run_id),
     )
     conn.commit()
 
@@ -124,7 +124,7 @@ def store_description(conn, artifact_id, full_path, description):
         "INSERT OR REPLACE INTO findings "
         "(source_tool, category, artifact_id, path, key, value, score, created_at) "
         "VALUES ('llava','photo-description',?,?,'description',?,50,?)",
-        (artifact_id, full_path, description, now_iso()),
+        (artifact_id, full_path, description, utc_now()),
     )
     conn.commit()
 

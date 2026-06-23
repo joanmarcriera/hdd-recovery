@@ -34,6 +34,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tui.stages import STAGES  # noqa: E402
 from lib.runs import reconcile_running  # noqa: E402
+from lib.timestamp import utc_now  # noqa: E402
 from lib.progress import build_stage_progress_probe  # noqa: E402
 from lib.supervised import (  # noqa: E402
     env_stop_requested,
@@ -92,10 +93,6 @@ PRESETS: dict[str, list[str]] = {
 }
 
 
-def now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
 def load_pipeline_env() -> dict[str, str]:
     """Load config/analysis-pipeline.env; values don't override existing env vars."""
     cfg = ROOT / "config" / "analysis-pipeline.env"
@@ -144,7 +141,7 @@ def unmet_prerequisites(db_path: str, stage, idx) -> list[str]:
 
 
 def log(msg: str, fh=None) -> None:
-    line = f"[{now_iso()}] {msg}"
+    line = f"[{utc_now()}] {msg}"
     print(line, flush=True)
     if fh:
         fh.write(line + "\n")

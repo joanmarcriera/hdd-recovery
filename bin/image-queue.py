@@ -26,7 +26,6 @@ import subprocess
 import sys
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from datetime import datetime, timezone
 from pathlib import Path
 
 PIPELINE = Path(__file__).resolve().parent / "image-pipeline.py"
@@ -37,10 +36,7 @@ from lib.supervised import (  # noqa: E402
     finish_env_runs,
     heartbeat_env_runs,
 )
-
-
-def _ts() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+from lib.timestamp import utc_now  # noqa: E402
 
 
 def build_cmd(db: str, stages: list[str], skip_done: bool, keep_going: bool,
@@ -78,16 +74,16 @@ def run_one(db: str, stages, skip_done, keep_going, stage_timeout=None,
                     stage_progress_interval,
                     require_prereqs)
     name = Path(db).name
-    print(f"[{_ts()}] START {name}", flush=True)
+    print(f"[{utc_now()}] START {name}", flush=True)
     t0 = time.time()
     try:
         env = os.environ.copy()
         env["SUPERVISED_FINISH_DISABLED"] = "1"
         rc = subprocess.run(cmd, env=env).returncode
     except Exception as e:
-        print(f"[{_ts()}] ERROR {name}: {e}", flush=True)
+        print(f"[{utc_now()}] ERROR {name}: {e}", flush=True)
         return 1
-    print(f"[{_ts()}] DONE  {name}  rc={rc}  ({int(time.time()-t0)}s)", flush=True)
+    print(f"[{utc_now()}] DONE  {name}  rc={rc}  ({int(time.time()-t0)}s)", flush=True)
     return rc
 
 
@@ -123,7 +119,7 @@ def main() -> int:
         ap.error("no --stages given")
     jobs = max(1, args.jobs)
 
-    print(f"[{_ts()}] queue: {len(args.dbs)} image(s), jobs={jobs}, "
+    print(f"[{utc_now()}] queue: {len(args.dbs)} image(s), jobs={jobs}, "
           f"stages={','.join(stages)}", flush=True)
     heartbeat_env_runs(progress=True)
 
@@ -146,7 +142,7 @@ def main() -> int:
             heartbeat_env_runs(progress=True)
             if env_stop_requested():
                 stopped_by_request = True
-                print(f"[{_ts()}] queue stop requested: not starting another image", flush=True)
+                print(f"[{utc_now()}] queue stop requested: not starting another image", flush=True)
                 break
             rcs.append(run_one(db, stages, args.skip_done, args.keep_going,
                                args.stage_timeout, args.stage_idle_timeout,
@@ -155,7 +151,7 @@ def main() -> int:
                                args.require_prereqs))
             if env_stop_requested():
                 stopped_by_request = True
-                print(f"[{_ts()}] queue stop requested: not starting another image", flush=True)
+                print(f"[{utc_now()}] queue stop requested: not starting another image", flush=True)
                 break
     else:
         with ThreadPoolExecutor(max_workers=jobs) as ex:
@@ -178,7 +174,7 @@ def main() -> int:
             for _ in range(jobs):
                 if env_stop_requested():
                     stopped_by_request = True
-                    print(f"[{_ts()}] queue stop requested: not starting additional images",
+                    print(f"[{utc_now()}] queue stop requested: not starting additional images",
                           flush=True)
                     break
                 if not submit_next():
@@ -191,7 +187,7 @@ def main() -> int:
                     rcs.append(fut.result())
                 if env_stop_requested():
                     if not stopped_by_request:
-                        print(f"[{_ts()}] queue stop requested: not starting additional images",
+                        print(f"[{utc_now()}] queue stop requested: not starting additional images",
                               flush=True)
                     stopped_by_request = True
                     continue
@@ -200,8 +196,8 @@ def main() -> int:
 
     failed = sum(1 for rc in rcs if rc != 0)
     if stopped_by_request:
-        print(f"[{_ts()}] queue stopped after current stage request", flush=True)
-    print(f"[{_ts()}] queue finished: {len(rcs)-failed} ok, {failed} failed", flush=True)
+        print(f"[{utc_now()}] queue stopped after current stage request", flush=True)
+    print(f"[{utc_now()}] queue finished: {len(rcs)-failed} ok, {failed} failed", flush=True)
     exit_code = 1 if failed else 0
     finish_env_runs(
         "failed" if failed else ("stopped" if stopped_by_request else "ok"),

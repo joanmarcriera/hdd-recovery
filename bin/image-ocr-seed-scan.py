@@ -29,6 +29,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
 
 from lib.seed_scan import best_match, load_wordlist, tokenize_text  # noqa: E402
+from lib.timestamp import utc_now  # noqa: E402
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -50,10 +51,6 @@ def best_bip39_run(text: str, bip39: set[str]) -> tuple[int, list[str]]:
     if not match:
         return 0, []
     return match.run_len, match.words
-
-
-def utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # ── Database helpers ──────────────────────────────────────────────────────────

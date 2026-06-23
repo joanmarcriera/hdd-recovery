@@ -5,8 +5,9 @@ import os
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
+
+from lib.timestamp import utc_now
 
 
 TABLE_COUNT_STAGES = {
@@ -45,10 +46,6 @@ DIR_COUNTER_PREFIXES = (
     "carve-",
     "photorec-",
 )
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _is_dir_counter_stage(stage: str) -> bool:
@@ -168,7 +165,7 @@ def latest_running_scan_run(db_path: str, stage: str) -> RunningScanRun | None:
 
 
 def touch_scan_run(db_path: str, run_id: int, *, progress: bool = False) -> None:
-    now = _utc_now()
+    now = utc_now()
     try:
         conn = sqlite3.connect(db_path)
         try:

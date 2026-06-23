@@ -7,15 +7,11 @@ import signal
 import sqlite3
 import socket
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
 from lib.runs import pid_alive
+from lib.timestamp import utc_now
 
 SUPERVISED_MARKERS = ("image-pipeline.py", "image-queue.py", "hdd-recovery")
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _host() -> str:
@@ -81,7 +77,7 @@ def create_supervised_run(
     notes: str = "",
 ) -> int:
     ensure_supervised_schema(db_path)
-    now = _now()
+    now = utc_now()
     conn = sqlite3.connect(db_path)
     try:
         cur = conn.execute(
@@ -105,7 +101,7 @@ def set_supervised_process(db_path: str, run_id: int, pid: int) -> None:
         pgid = os.getpgid(pid)
     except OSError:
         pgid = None
-    now = _now()
+    now = utc_now()
     conn = sqlite3.connect(db_path)
     try:
         conn.execute(
@@ -128,7 +124,7 @@ def update_supervised_heartbeat(
     progress: bool = False,
 ) -> None:
     ensure_supervised_schema(db_path)
-    now = _now()
+    now = utc_now()
     conn = sqlite3.connect(db_path)
     try:
         if progress:
@@ -163,7 +159,7 @@ def finish_supervised_run(
     notes: str = "",
 ) -> None:
     ensure_supervised_schema(db_path)
-    now = _now()
+    now = utc_now()
     conn = sqlite3.connect(db_path)
     try:
         conn.execute(
@@ -189,7 +185,7 @@ def cancel_supervised_run(db_path: str, run_id: int) -> bool:
             "SELECT pid,pgid FROM supervised_runs WHERE id=?",
             (run_id,),
         ).fetchone()
-        now = _now()
+        now = utc_now()
         conn.execute(
             """
             UPDATE supervised_runs
@@ -228,7 +224,7 @@ def request_supervised_stop(
 ) -> bool:
     """Request a graceful stop without terminating the running process group."""
     ensure_supervised_schema(db_path)
-    now = _now()
+    now = utc_now()
     conn = sqlite3.connect(db_path)
     try:
         cur = conn.execute(
@@ -274,7 +270,7 @@ def reconcile_supervised_runs(
             "SELECT id,pid FROM supervised_runs "
             "WHERE status IN ('starting','running') AND pid IS NOT NULL"
         ).fetchall()
-        now = _now()
+        now = utc_now()
         n = 0
         for run_id, pid in rows:
             if pid_alive(pid, markers):

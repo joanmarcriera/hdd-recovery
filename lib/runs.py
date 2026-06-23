@@ -11,15 +11,12 @@ from __future__ import annotations
 import os
 import sqlite3
 import sys
-from datetime import datetime, timezone
+
+from lib.timestamp import utc_now
 
 # cmdline fingerprints of our stage processes; used to reject PID reuse by an
 # unrelated process that happens to inherit a recycled PID.
 STAGE_MARKERS = ("image-", "hdd-recovery")
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _darwin_cmdline(pid: int) -> str | None:
@@ -92,7 +89,7 @@ def reconcile_running(db_path: str, markers=STAGE_MARKERS) -> int:
             "SELECT id, pid FROM scan_runs "
             "WHERE status='running' AND pid IS NOT NULL"
         ).fetchall()
-        now = _now()
+        now = utc_now()
         n = 0
         for run_id, pid in rows:
             if pid_alive(pid, markers):
