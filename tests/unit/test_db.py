@@ -115,6 +115,20 @@ class TestScanRunRoundTrip(_TmpDB):
         finally:
             conn.close()
 
+    def test_omitted_paths_round_trip_as_empty_string(self):
+        # Callers like image-tag-photos.py omit log_path/output_dir; they must
+        # land as '' (not NULL), matching what the progress probe COALESCEs.
+        conn = sqlite3.connect(self.path)
+        try:
+            run_id = start_scan_run(conn, "demo", "cmd")
+            row = conn.execute(
+                "SELECT log_path, output_dir FROM scan_runs WHERE id=?",
+                (run_id,)).fetchone()
+            self.assertEqual(row[0], "")
+            self.assertEqual(row[1], "")
+        finally:
+            conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

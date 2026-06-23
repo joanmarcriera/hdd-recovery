@@ -6,7 +6,9 @@ that were independently reimplemented across the Python CLIs and lib modules.
 
 ``start_scan_run``/``end_scan_run`` write the same ``scan_runs`` columns as the
 bash twins ``record_scan_start``/``record_scan_end`` in ``lib/common.sh`` (minus
-the supervision columns the bash layer also sets); keep the two compatible.
+the supervision columns — ``pid``/``pgid``/``host``/``heartbeat_at`` — which the
+bash layer sets but these standalone, non-supervised tools do not); keep the two
+compatible.
 ``fetch_image_info`` deliberately reads the DB (the source of truth) rather than
 re-deriving paths from the environment, so it cannot drift from the bash
 ``default_export_root``/``default_db_path`` fallbacks.
@@ -43,6 +45,9 @@ def open_writable_db(db_path, *, pragmas=DEFAULT_PRAGMAS, ddl=None):
     for pragma in pragmas:
         conn.execute(f"PRAGMA {pragma}")
     if ddl:
+        # executescript() implicitly COMMITs any pending transaction before
+        # running. That is safe here only because the pragmas above are all
+        # non-transactional (they take effect immediately); keep it that way.
         conn.executescript(ddl)
     conn.commit()
     return conn
@@ -82,7 +87,7 @@ def start_scan_run(conn, stage, command_line, log_path="", output_dir="") -> int
         (stage, "running", utc_now(), command_line, log_path, output_dir),
     )
     conn.commit()
-    return cur.lastrowid
+    return int(cur.lastrowid)
 
 
 def end_scan_run(conn, run_id, status, notes="") -> None:

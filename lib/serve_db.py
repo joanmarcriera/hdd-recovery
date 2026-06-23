@@ -65,9 +65,10 @@ _DISCOVERY_PRUNE = {
 # image_info at the *real* image/export root, so if it were discovered it would
 # show as a phantom duplicate in the UI and — worse — get enqueued and re-run
 # the pipeline into the genuine export tree. Prune these dirs by name prefix.
+# Dotted variants (e.g. ".rsync_conflict_backups…") are already pruned by the
+# leading-dot rule in _is_pruned_dir, so only the undotted prefix is needed here.
 _DISCOVERY_PRUNE_PREFIXES = (
     "_rsync_conflict_backups",
-    ".rsync_conflict_backups",
 )
 _DISCOVERY_MAX_DEPTH = 4
 

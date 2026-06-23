@@ -92,6 +92,22 @@ class TestRotateWithBackup(unittest.TestCase):
             self.assertEqual(kv.get("FILE_BACKUP"), "ok")
             self.assertEqual(kv.get("DIR_BACKUP"), "ok")
 
+    def test_rotates_empty_dir(self):
+        # The helper rotates ANY existing path; the "skip empty dirs" policy
+        # lives in callers (e.g. image-carve.sh's ls -A guard), not here.
+        with tempfile.TemporaryDirectory() as root:
+            d = os.path.join(root, "empty")
+            proc = _run(
+                f'mkdir -p "{d}"\n'
+                f'rotate_with_backup "{d}"\n'
+                f'[ -e "{d}" ] || echo "GONE=ok"\n'
+                f'ls -d "{d}".prev-* >/dev/null 2>&1 && echo "BACKUP=ok"\n',
+                root)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            kv = _kv(proc.stdout)
+            self.assertEqual(kv.get("GONE"), "ok")
+            self.assertEqual(kv.get("BACKUP"), "ok")
+
     def test_missing_path_is_noop(self):
         with tempfile.TemporaryDirectory() as root:
             proc = _run(

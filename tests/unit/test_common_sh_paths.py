@@ -42,6 +42,12 @@ class TestNameHelpers(unittest.TestCase):
     def test_image_basename_only_last_ext(self):
         self.assertEqual(_out("", '$(image_basename /a/foo.tar.gz)'), "foo.tar")
 
+    def test_image_basename_no_extension(self):
+        self.assertEqual(_out("", '$(image_basename /mnt/x/diskimage)'), "diskimage")
+
+    def test_image_basename_trailing_dot(self):
+        self.assertEqual(_out("", '$(image_basename /mnt/x/foo.)'), "foo")
+
 
 class TestDefaultDbPath(unittest.TestCase):
     def test_uses_db_root_when_set_from_config(self):
