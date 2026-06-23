@@ -200,6 +200,37 @@ ensure_work_dirs() {
     "$export_root/exports"
 }
 
+# prepare_work_dirs <export_root> <hits_subdir> <log_stage> [extra_dirs...]
+#
+# Derive and create the standard per-stage work directories, setting the globals
+# the caller then uses. <hits_subdir> and <log_stage> are separate because some
+# stages name them differently (e.g. hits/trid + logs/enrich-trid-*). Timestamps
+# use the compact, filename-safe form (no colons), distinct from timestamp_utc.
+#   timestamp -> <YYYYMMDDTHHMMSSZ>
+#   out_dir   -> <export_root>/hits/<hits_subdir>/<timestamp>
+#   log_path  -> <export_root>/logs/<log_stage>-<timestamp>.log
+prepare_work_dirs() {
+  local export_root="$1" hits_subdir="$2" log_stage="$3"
+  shift 3
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  out_dir="$export_root/hits/$hits_subdir/$timestamp"
+  log_path="$export_root/logs/$log_stage-$timestamp.log"
+  mkdir -p "$out_dir" "$(dirname "$log_path")" "$@"
+}
+
+# rotate_with_backup <path>
+#
+# If <path> exists (file or directory), move it aside to <path>.prev-<timestamp>
+# and log the rotation; a missing path is a silent no-op. Preserves prior output
+# additively per the evidence-preservation rules (never overwrite in place).
+rotate_with_backup() {
+  local path="$1"
+  [[ -e "$path" ]] || return 0
+  local backup="${path}.prev-$(date -u +%Y%m%dT%H%M%SZ)"
+  log "Preserving previous $(basename "$path") at $backup"
+  mv "$path" "$backup"
+}
+
 db_image_export_root() {
   db_value "$1" "SELECT export_root FROM image_info WHERE id=1;"
 }

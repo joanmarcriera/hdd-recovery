@@ -40,15 +40,12 @@ run_one() {
   local log_path="$export_root/logs/${stage}.log"
   local status="ok"
   local notes=""
-  if [[ -f "$log_path" ]]; then
-    mv "$log_path" "${log_path}.prev-$(date -u +%Y%m%dT%H%M%SZ)"
-  fi
+  rotate_with_backup "$log_path"
   # Back up any existing output so reruns don't overwrite partial results.
   # Scalpel refuses to run into a non-empty directory; others may silently clobber.
+  # Only rotate a non-empty dir (an empty one is harmless to reuse).
   if [[ -d "$tool_dir" ]] && [[ -n "$(ls -A "$tool_dir" 2>/dev/null)" ]]; then
-    local backup_dir="${tool_dir}.prev-$(date -u +%Y%m%dT%H%M%SZ)"
-    log "Backing up existing ${tool} output: $(basename "$tool_dir") -> $(basename "$backup_dir")"
-    mv "$tool_dir" "$backup_dir"
+    rotate_with_backup "$tool_dir"
   fi
   mkdir -p "$tool_dir"
   local run_id

@@ -49,10 +49,7 @@ done
 need_cmd python3
 
 export_root="$(db_image_export_root "$db")"
-timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-out_dir="$export_root/hits/trid/$timestamp"
-log_path="$export_root/logs/enrich-trid-$timestamp.log"
-mkdir -p "$out_dir" "$(dirname "$log_path")"
+prepare_work_dirs "$export_root" trid enrich-trid
 
 candidate_count="$(sqlite3 -noheader "$db" "
 SELECT COUNT(*)

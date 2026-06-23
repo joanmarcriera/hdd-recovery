@@ -44,17 +44,8 @@ fi
 
 run_id="$(record_scan_start "$db" "bulk-extractor-$scope" "$0 $db --scope $scope" "$log_path" "$scope_dir")"
 
-timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-if [[ -d "$scope_dir" ]]; then
-  backup_dir="${scope_dir}.prev-${timestamp}"
-  log "Preserving previous bulk_extractor output at $backup_dir"
-  mv "$scope_dir" "$backup_dir"
-fi
-if [[ -f "$log_path" ]]; then
-  backup_log="${log_path}.prev-${timestamp}"
-  log "Preserving previous bulk_extractor log at $backup_log"
-  mv "$log_path" "$backup_log"
-fi
+rotate_with_backup "$scope_dir"
+rotate_with_backup "$log_path"
 
 mkdir -p "$scope_dir"
 
