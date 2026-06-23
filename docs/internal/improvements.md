@@ -60,7 +60,7 @@ Most scripts lack `set -Eeuo pipefail`. A carving tool that exits 1 can silently
 
 ### 6. OCR seed phrase scanning not wired into pipeline
 
-`bin/image-ocr-seed-scan.py` exists and `BITCOIN-WALLET-RECOVERY.md` lists it as Step 6, but it is NOT registered in `tui/stages.py` or `bin/image-pipeline.py`. The script is completely orphaned. `tesseract-ocr` is already installed in the container.
+`bin/image-ocr-seed-scan.py` exists and `../recovery/wallets.md` lists it as Step 6, but it is NOT registered in `tui/stages.py` or `bin/image-pipeline.py`. The script is completely orphaned. `tesseract-ocr` is already installed in the container.
 
 **Fix:** Register it as a stage after `image-enrich-photos.sh` in `tui/stages.py` and `bin/image-pipeline.py`. Add pgrep pattern and `scan_runs` tracking.
 

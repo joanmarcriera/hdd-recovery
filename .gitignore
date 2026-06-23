@@ -35,6 +35,15 @@ docker/.env
 docker/*.log
 docker/*.log.gz
 
+# AI agent tooling — local-only scratch, not part of the project.
+# (.claude/ is intentionally tracked: it holds the project's operator skills.)
+.codebuddy/
+.continue/
+.junie/
+.kiro/
+.agents/
+skills-lock.json
+
 # OS / editor noise
 .DS_Store
 Thumbs.db
@@ -46,3 +55,6 @@ Thumbs.db
 *~
 __pycache__/
 *.pyc
+
+# Symlink into the ignored .agents tree (not portable)
+.claude/skills/bash-defensive-patterns

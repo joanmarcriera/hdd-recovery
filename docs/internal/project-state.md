@@ -28,7 +28,7 @@ imports against untracked local modules.
   `image-crack-wallet.sh --wordlist`.
 - **#10 RAW photo support** — verified already covered (PhotoRec `--profile
   broad` enables all RAW formats; `PICTURE_EXTENSIONS` lists cr2/nef/arw/…). Not
-  implemented; documented in `IMPROVEMENTS.md`.
+  implemented; documented in `improvements.md`.
 - **Doc hygiene** — archived the stale 2026-05-04 Kingston handoff
   (`NEXT-RUN-TODO.md` → `.archive/`), removed stale live-pipeline state from
   `TODO.md`, refreshed the `image-serve.py` line count.
@@ -99,4 +99,4 @@ verify the web UI no longer crash-loops and `/images/new` renders.
 ## Known Blockers
 
 None for #18. Owner-side fixture/GPU verification items remain tracked in
-`STAGE1-PROGRESS.md`.
+`stage1-progress.md`.

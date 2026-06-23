@@ -14,6 +14,11 @@ CPython during Kali package post-install (`docker/build-and-push.sh` aborts if
 
 ## Hosts
 
+The addresses below are the maintainer's own setup. **Forking this project?**
+Substitute your own: set `IMAGE_REPO=<you>/<image>` for `docker/build-and-push.sh`,
+and replace the builder/NAS host+IP with yours (any native linux/amd64 host can
+build; any Docker host can run it).
+
 | Role | Address | Notes |
 |------|---------|-------|
 | Dev / repo | this Mac | edit + commit + push to GitHub `main` |

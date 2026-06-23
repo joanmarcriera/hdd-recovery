@@ -60,7 +60,7 @@
 - [x] #10 RAW photo format support — verified already covered (2026-06-20)
   - PhotoRec `--profile broad` enables all RAW formats and `PICTURE_EXTENSIONS`
     already lists cr2/nef/arw/dng/raf/orf, so no work was needed. See
-    `IMPROVEMENTS.md` #10.
+    `improvements.md` #10.
 
 - [x] #8 wallet candidate deduplication. (2026-06-20)
   - Non-destructive query-time merge: `/wallets` groups candidates by file,

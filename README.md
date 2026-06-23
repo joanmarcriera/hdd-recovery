@@ -358,8 +358,22 @@ For `disk.img`, the default SQLite path is `/data/db/disk.img.analysis.sqlite`. 
 
 ---
 
+## Documentation
+
+Full guides live under [`docs/`](docs/) ([index](docs/README.md)):
+
+- **Operator** — [acquisition checklist](docs/operator/acquisition-checklist.md), [ddrescue workflow](docs/operator/ddrescue-workflow.md), [next-disk checklist](docs/operator/future-disk-checklist.md)
+- **Analysis** — [image-analysis workflow](docs/analysis/image-analysis-workflow.md), [bulk-discovery runbook](docs/analysis/bulk-discovery-runbook.md)
+- **Recovery** — [wallets](docs/recovery/wallets.md), [pictures](docs/recovery/pictures.md)
+- **Reference** — [tool selection](docs/reference/tool-selection.md)
+- **Internal** (design notes, history) — [`docs/internal/`](docs/internal/)
+
+---
+
 ## Security notes
 
+- Report vulnerabilities privately — see [SECURITY.md](SECURITY.md).
+- **Intended use:** authorized recovery of your own data and authorized forensic/security work only. This toolchain extracts private keys, passwords, and personal files; do not point it at media you are not authorized to examine.
 - The browser terminal under `/terminal/` requires a password set via `TTYD_PASSWORD`. The review UI also requires HTTP Basic auth when `TTYD_PASSWORD` or `WEBUI_PASSWORD` is set. Use strong credentials even on a LAN.
 - Treat the unified UI as LAN-only. If you expose it beyond the LAN, put a real reverse proxy with TLS in front of port `7788`.
 - The container does not require `--privileged` or any special Linux capabilities. It reads image files exclusively via the volume mount.
@@ -371,7 +385,7 @@ For `disk.img`, the default SQLite path is `/data/db/disk.img.analysis.sqlite`. 
 
 Issues and pull requests are welcome. This project is actively used for real data recovery work — bug reports with reproduction steps are especially valued.
 
-All analysis runs on image files. The original source disks are never written to or mounted read-write.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, the test/lint commands, and the safety conventions every change must follow (notably: scripts default to a preview and require an explicit `--run`; source disks are never written to). By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ---
 

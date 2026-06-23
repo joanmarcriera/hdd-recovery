@@ -46,7 +46,7 @@ For each image:
 7. Human review
 
 Use:
-- [IMAGE-ANALYSIS-WORKFLOW.md](/root/hdd-recovery/IMAGE-ANALYSIS-WORKFLOW.md) for the core path
+- [image-analysis-workflow.md](image-analysis-workflow.md) for the core path
 - this runbook for the heavy path; the older bulk-discovery workflow note has
   been archived as a superseded historical document
 
