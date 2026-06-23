@@ -20,6 +20,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from lib.db import ro_db
+
 
 class ResetError(Exception):
     """A reset was refused (unsafe target, missing data, or active writer)."""
@@ -58,12 +60,8 @@ def _read_image_info(db_path):
     if not os.path.isfile(db_path):
         raise ResetError(f"database not found: {db_path}")
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        conn.row_factory = sqlite3.Row
-        try:
+        with ro_db(db_path) as conn:
             row = conn.execute("SELECT * FROM image_info WHERE id=1").fetchone()
-        finally:
-            conn.close()
     except sqlite3.Error as exc:
         raise ResetError(f"cannot read image_info from {db_path}: {exc}")
     if row is None:

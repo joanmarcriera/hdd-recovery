@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from lib.db import ro_db
 from lib.timestamp import utc_now
 
 
@@ -128,11 +129,8 @@ def table_row_count(db_path: str, table: str) -> int | None:
     if table not in allowed:
         raise ValueError(f"unsupported progress table: {table}")
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        try:
+        with ro_db(db_path) as conn:
             row = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()
-        finally:
-            conn.close()
     except sqlite3.Error:
         return None
     return int(row[0]) if row else None
@@ -147,16 +145,13 @@ class RunningScanRun:
 
 def latest_running_scan_run(db_path: str, stage: str) -> RunningScanRun | None:
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-        try:
+        with ro_db(db_path) as conn:
             row = conn.execute(
                 "SELECT id, COALESCE(output_dir,''), COALESCE(log_path,'') "
                 "FROM scan_runs WHERE stage=? AND status='running' "
                 "ORDER BY started_at DESC, id DESC LIMIT 1",
                 (stage,),
             ).fetchone()
-        finally:
-            conn.close()
     except sqlite3.Error:
         return None
     if not row:

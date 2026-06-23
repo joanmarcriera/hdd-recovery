@@ -25,7 +25,6 @@ from __future__ import annotations
 import argparse
 import os
 import shlex
-import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 from tui.stages import STAGES  # noqa: E402
+from lib.db import fetch_image_info, ro_db  # noqa: E402
 from lib.runs import reconcile_running  # noqa: E402
 from lib.timestamp import utc_now  # noqa: E402
 from lib.progress import build_stage_progress_probe  # noqa: E402
@@ -114,15 +114,12 @@ def load_pipeline_env() -> dict[str, str]:
 
 def stage_is_done(db_path: str, scan_run_key: str) -> bool:
     """Return True if the most recent completed (non-running) scan_run has status='ok'."""
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    try:
+    with ro_db(db_path) as conn:
         row = conn.execute(
             "SELECT status FROM scan_runs WHERE stage=? AND status != 'running'"
             " ORDER BY started_at DESC LIMIT 1",
             (scan_run_key,),
         ).fetchone()
-    finally:
-        conn.close()
     return row is not None and row[0] == "ok"
 
 
@@ -181,21 +178,15 @@ def list_presets() -> None:
 
 
 def db_image_context(db_path: str) -> dict[str, str]:
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
-        row = conn.execute(
-            "SELECT image_path, export_root, ddrescue_map_path "
-            "FROM image_info WHERE id=1"
-        ).fetchone()
-    finally:
-        conn.close()
-    if not row:
+        info = fetch_image_info(db_path)
+    except LookupError:
         sys.exit(f"image_info row missing in {db_path} — run image-analysis-init.sh first")
     return {
         "db": db_path,
-        "image": row[0] or "",
-        "export_root": row[1] or "",
-        "mapfile": row[2] or "",
+        "image": info.image_path,
+        "export_root": info.export_root,
+        "mapfile": info.ddrescue_map_path,
         "conf": "",
     }
 

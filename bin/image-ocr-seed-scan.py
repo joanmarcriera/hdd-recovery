@@ -28,6 +28,7 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT_DIR))
 
+from lib.db import end_scan_run, fetch_image_info, start_scan_run  # noqa: E402
 from lib.seed_scan import best_match, load_wordlist, tokenize_text  # noqa: E402
 from lib.timestamp import utc_now  # noqa: E402
 
@@ -53,24 +54,6 @@ def best_bip39_run(text: str, bip39: set[str]) -> tuple[int, list[str]]:
     return match.run_len, match.words
 
 
-# ── Database helpers ──────────────────────────────────────────────────────────
-
-def record_scan_start(conn: sqlite3.Connection, cmdline: str, log_path: str, output_dir: str) -> int:
-    cur = conn.execute(
-        "INSERT INTO scan_runs(stage,status,started_at,command_line,log_path,output_dir) "
-        "VALUES('ocr-seed-scan','running',?,?,?,?)",
-        (utc_now(), cmdline, log_path, output_dir),
-    )
-    conn.commit()
-    return cur.lastrowid
-
-
-def record_scan_end(conn: sqlite3.Connection, run_id: int, status: str, notes: str = "") -> None:
-    conn.execute(
-        "UPDATE scan_runs SET status=?, ended_at=?, notes=? WHERE id=?",
-        (status, utc_now(), notes, run_id),
-    )
-    conn.commit()
 
 
 def add_note(conn: sqlite3.Connection, note: str) -> None:
@@ -136,12 +119,10 @@ def main() -> None:
         sys.exit("BIP39 wordlist not found. Run inside the Docker container or pass --wordlist.")
     conn = sqlite3.connect(args.db)
 
-    export_root = conn.execute(
-        "SELECT export_root FROM image_info WHERE id=1"
-    ).fetchone()
-    if not export_root:
+    try:
+        export_root = fetch_image_info(args.db).export_root
+    except LookupError:
         sys.exit("image_info row not found — run image-analysis-init.sh first")
-    export_root = export_root[0]
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out_dir = os.path.join(export_root, "hits", "ocr-seeds", timestamp)
@@ -151,7 +132,7 @@ def main() -> None:
     summary_txt = os.path.join(out_dir, "summary.txt")
 
     cmdline = " ".join(sys.argv)
-    run_id = record_scan_start(conn, cmdline, log_path, out_dir)
+    run_id = start_scan_run(conn, "ocr-seed-scan", cmdline, log_path, out_dir)
 
     if args.dir:
         images = images_from_dir(args.dir)
@@ -215,8 +196,8 @@ def main() -> None:
     print(f"Results: {hits_tsv}")
     print(f"Summary: {summary_txt}")
 
-    record_scan_end(conn, run_id, status,
-                    f"{len(hits)} hits from {total} images; min_words={args.min_words}")
+    end_scan_run(conn, run_id, status,
+                 f"{len(hits)} hits from {total} images; min_words={args.min_words}")
     conn.close()
 
 

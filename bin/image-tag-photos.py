@@ -17,12 +17,13 @@ The findings table is created automatically if absent (schema is idempotent).
 Progress is tracked in scan_runs.  Interrupt with Ctrl-C; re-run to resume.
 """
 
-import argparse, base64, concurrent.futures, json, os, sqlite3, sys, time, urllib.request, urllib.error
+import argparse, base64, concurrent.futures, json, os, sys, time, urllib.request, urllib.error
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+from lib.db import end_scan_run, open_writable_db, start_scan_run  # noqa: E402
 from lib.timestamp import utc_now  # noqa: E402
 
 STAGE = "llava-tag-photos"
@@ -77,39 +78,12 @@ def default_worker_count(ollama_urls, requested):
     return max(1, len(ollama_urls))
 
 
-def open_db(path):
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    for stmt in FINDINGS_DDL.split(";"):
-        stmt = stmt.strip()
-        if stmt:
-            conn.execute(stmt)
-    conn.commit()
-    return conn
-
-
 def record_start(conn, scope, min_size, limit, model, ollama_urls, workers):
     ollama_label = ",".join(ollama_urls)
     cmd = (f"image-tag-photos.py <db> --scope {scope} --min-size {min_size} "
            f"--model {model} --ollama {ollama_label} --workers {workers}"
            + (f" --limit {limit}" if limit else ""))
-    cur = conn.execute(
-        "INSERT INTO scan_runs (stage, status, started_at, command_line) VALUES (?,?,?,?)",
-        (STAGE, "running", utc_now(), cmd),
-    )
-    conn.commit()
-    return cur.lastrowid
-
-
-def record_end(conn, run_id, status, notes=""):
-    conn.execute(
-        "UPDATE scan_runs SET status=?, ended_at=?, notes=? WHERE id=?",
-        (status, utc_now(), notes, run_id),
-    )
-    conn.commit()
+    return start_scan_run(conn, STAGE, cmd)
 
 
 def is_tagged(conn, artifact_id):
@@ -218,7 +192,7 @@ def main():
             except Exception as e:
                 sys.exit(f"Cannot reach Ollama at {ollama_url}: {e}")
 
-    conn = open_db(args.db)
+    conn = open_writable_db(args.db, ddl=FINDINGS_DDL)
 
     if args.scope == "real":
         where = "mime_type = 'image/jpeg' AND size_bytes >= ?"
@@ -341,7 +315,7 @@ def main():
     status = "ok" if errors == 0 else ("partial" if tagged > 0 else "failed")
     notes = (f"tagged={tagged} skipped={skipped} errors={errors} "
              f"(retry_failures={len(pending)} missing={missing})")
-    record_end(conn, run_id, status, notes)
+    end_scan_run(conn, run_id, status, notes)
 
     if pending:
         log(f"Images still failing after {args.max_attempts} attempts "
