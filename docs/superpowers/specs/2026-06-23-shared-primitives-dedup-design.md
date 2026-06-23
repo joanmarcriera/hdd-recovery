@@ -1,7 +1,7 @@
 # Shared Primitives Extraction — De-duplication Cycle 1
 
 **Date:** 2026-06-23
-**Status:** Approved, implementing
+**Status:** Implemented (commits 142229f, 7e6ff69, e843375) — 189 unit tests green
 **Scope:** First of several de-dup/modularization cycles toward open-source release. This cycle extracts the highest-value, lowest-risk shared primitives. Deferred to later cycles: `serve_pages.py` decomposition, bash retrofit of the remaining ~28 stage scripts, public-release hygiene, and best-practices tooling.
 
 ## Goal
