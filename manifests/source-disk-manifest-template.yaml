@@ -1,6 +1,6 @@
 date_started:
 operator:
-host: optiplex7040
+host:                 # imaging workstation hostname
 
 source_disk:
   devnode:
