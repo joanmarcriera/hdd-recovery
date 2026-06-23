@@ -1,7 +1,7 @@
 # Release Hygiene — Open-Source Readiness
 
 **Date:** 2026-06-23
-**Status:** Approved, implementing
+**Status:** Implemented (commits e4e3645 [2a], 7b74eca [2b]) — 198 unit tests green; reviewed clean. Note: 2a's portability audit found the serve/transfer code already honours `RECOVERY_ROOT`/`LOG_ROOT`/`--src/--dst`, so no path code was churned — 2a delivered characterization tests + the manifest-template placeholder instead.
 **Scope:** Second workstream toward public release. Two sub-cycles: **2a portability** (code/config, tests-first) and **2b docs/repo hygiene**. Decisions confirmed with the owner:
 
 - **Keep real identifiers** (disk serial, UUID, LAN IP, build hostnames) — owner's own gear, acceptable to publish. **No privacy scrub.**
