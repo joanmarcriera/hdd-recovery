@@ -59,7 +59,24 @@ _DISCOVERY_PRUNE = {
     "exports", "recovered", "indexes", "winmem", "photorec", "carved",
     "hits", "state", "reports", "logs", "manifests", "structure",
 }
+# Stale backup copies of DBs live under directories like
+# ``_rsync_conflict_backups_20260507-150519/`` (created by rsync --backup-dir
+# during the bind-mount/ENOSPC incidents). A copied DB still points its
+# image_info at the *real* image/export root, so if it were discovered it would
+# show as a phantom duplicate in the UI and — worse — get enqueued and re-run
+# the pipeline into the genuine export tree. Prune these dirs by name prefix.
+_DISCOVERY_PRUNE_PREFIXES = (
+    "_rsync_conflict_backups",
+    ".rsync_conflict_backups",
+)
 _DISCOVERY_MAX_DEPTH = 4
+
+
+def _is_pruned_dir(name):
+    lname = name.lower()
+    if lname in _DISCOVERY_PRUNE or name.startswith("."):
+        return True
+    return any(lname.startswith(p) for p in _DISCOVERY_PRUNE_PREFIXES)
 
 
 def find_databases(root, max_depth=_DISCOVERY_MAX_DEPTH):
@@ -71,8 +88,7 @@ def find_databases(root, max_depth=_DISCOVERY_MAX_DEPTH):
         if depth >= max_depth:
             dirnames[:] = []
         else:
-            dirnames[:] = [d for d in dirnames
-                           if d.lower() not in _DISCOVERY_PRUNE and not d.startswith(".")]
+            dirnames[:] = [d for d in dirnames if not _is_pruned_dir(d)]
         for fn in filenames:
             if fn.endswith(".analysis.sqlite"):
                 found.append(os.path.join(dirpath, fn))

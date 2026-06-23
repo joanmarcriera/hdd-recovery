@@ -63,6 +63,21 @@ class TestFindDatabases(unittest.TestCase):
             found = dbmod.find_databases(root)
             self.assertEqual(found, [os.path.join(keep, "x.analysis.sqlite")])
 
+    def test_prunes_rsync_conflict_backup_dirs(self):
+        # Stale DB copies under rsync --backup-dir trees must not be discovered:
+        # they point image_info at the real image/export and would show as
+        # phantom duplicates and get re-enqueued.
+        with tempfile.TemporaryDirectory() as root:
+            images = os.path.join(root, "images")
+            backup = os.path.join(images, "_rsync_conflict_backups_20260507-150519")
+            for path in (images, backup):
+                os.makedirs(path)
+                open(os.path.join(path, "disk.img.analysis.sqlite"), "w").close()
+
+            found = dbmod.find_databases(root)
+            self.assertEqual(
+                found, [os.path.join(images, "disk.img.analysis.sqlite")])
+
 
 if __name__ == "__main__":
     unittest.main()
