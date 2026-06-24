@@ -25,7 +25,7 @@ need_cmd ddrescuelog
 
 printf '=== Map file: %s ===\n\n' "$mapfile"
 
-printf '--- Coverage summary ---\n'
+printf -- '--- Coverage summary ---\n'
 ddrescuelog -t "$mapfile" 2>/dev/null || printf '(ddrescuelog -t failed)\n'
 
 printf '\n--- Block regions (pos / size / status) ---\n'

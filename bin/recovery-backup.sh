@@ -87,7 +87,7 @@ printf 'Log    : %s\n\n' "$LOGFILE"
 mkdir -p "$DST"
 
 # ── Tier 1: SQLite catalogs ───────────────────────────────────────────────
-printf '--- Tier 1: SQLite catalogs (*.analysis.sqlite) ---\n'
+printf -- '--- Tier 1: SQLite catalogs (*.analysis.sqlite) ---\n'
 find "$SRC" -maxdepth 3 \
   \( -name "*.analysis.sqlite" -o -name "*.analysis.sqlite-wal" -o -name "*.analysis.sqlite-shm" \) \
   -print0 \

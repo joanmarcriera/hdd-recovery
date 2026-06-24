@@ -172,9 +172,9 @@ EOF
     while IFS='|' read -r method outdir; do
       if [[ -n "$outdir" && -d "$outdir" ]]; then
         usage_str="$(du -sh "$outdir" 2>/dev/null | cut -f1)"
-        printf '- **%s** → `%s` (%s on disk)\n' "$method" "$outdir" "${usage_str:-?}"
+        printf -- '- **%s** → `%s` (%s on disk)\n' "$method" "$outdir" "${usage_str:-?}"
       elif [[ -n "$outdir" ]]; then
-        printf '- **%s** → `%s` _(directory not found)_\n' "$method" "$outdir"
+        printf -- '- **%s** → `%s` _(directory not found)_\n' "$method" "$outdir"
       fi
     done < <(sqlite3 -noheader -separator '|' "$db_ro" \
       "SELECT ra.method, MAX(sr.output_dir)
