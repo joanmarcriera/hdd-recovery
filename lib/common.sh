@@ -44,7 +44,13 @@ image_basename() {
 default_db_path() {
   local image="$1"
   local suffix="${DB_SUFFIX:-.analysis.sqlite}"
-  if [[ -n "${DB_ROOT:-}" ]]; then
+  # An existing beside-image DB is canonical for that image — reuse it even when
+  # DB_ROOT is set, so init-db (and any other caller) never creates a divergent
+  # empty stub at DB_ROOT for an already-catalogued image (the "no progress"
+  # duplicate bug). Mirrors lib/serve_images.py::_db_path_for_image.
+  if [[ -f "${image}${suffix}" ]]; then
+    printf '%s%s\n' "$image" "$suffix"
+  elif [[ -n "${DB_ROOT:-}" ]]; then
     printf '%s/%s%s\n' "$DB_ROOT" "$(image_name "$image")" "$suffix"
   else
     printf '%s%s\n' "$image" "$suffix"

@@ -61,6 +61,21 @@ class TestDefaultDbPath(unittest.TestCase):
             _out('export DB_ROOT=/nvme/db\n', '$(default_db_path /imgs/foo.img)'),
             "/nvme/db/foo.img.analysis.sqlite")
 
+    def test_prefers_existing_beside_db_over_db_root(self):
+        # Root cause of the duplicate "no progress" stubs: the pipeline's
+        # init-db derives the DB path via default_db_path. With DB_ROOT set it
+        # used to create a fresh DB_ROOT stub even when the image already had a
+        # populated beside-image DB. An existing beside DB must win.
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            img = os.path.join(d, "foo.img")
+            open(img, "w").close()
+            beside = img + ".analysis.sqlite"
+            open(beside, "w").close()
+            out = _out("export DB_ROOT=/data/db\n", f"$(default_db_path {img})")
+            self.assertEqual(out, beside)
+
     def test_falls_back_to_image_path_when_db_root_unset(self):
         # Unset AFTER sourcing (config would otherwise set it).
         proc = _run("", 'unset DB_ROOT\nprintf "%s" "$(default_db_path /imgs/foo.img)"\n')
