@@ -82,6 +82,19 @@ class TestQueueProgressHtml(unittest.TestCase):
         html = qlog.queue_progress_html(self._prog(total=0), False, lambda s: s)
         self.assertIn("idle", html.lower())
 
+    def test_queue_outcome_classification(self):
+        self.assertEqual(qlog.queue_outcome(
+            self._prog(total=9, done=9, finished="9 ok"), False), "finished")
+        self.assertEqual(qlog.queue_outcome(
+            self._prog(total=9, done=3), True), "running")
+        self.assertEqual(qlog.queue_outcome(
+            self._prog(total=11, done=5), False), "abnormal")
+        self.assertEqual(qlog.queue_outcome(
+            self._prog(total=0), False), "idle")
+        # A finished run that is somehow still flagged running is still finished.
+        self.assertEqual(qlog.queue_outcome(
+            self._prog(total=9, done=9, finished="9 ok"), True), "finished")
+
 
 class TestCollapseNoise(unittest.TestCase):
     def test_collapses_runs_but_keeps_markers(self):

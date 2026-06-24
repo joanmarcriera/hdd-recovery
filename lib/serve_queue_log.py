@@ -108,16 +108,34 @@ def queue_progress_cached(path):
     return prog
 
 
+def queue_outcome(prog, running):
+    """Classify a queue run from its parsed progress + a live-process flag.
+
+    Returns one of: 'finished' (saw the "queue finished" marker), 'running',
+    'abnormal' (process gone, no finish marker, images left undone — i.e. a
+    crash or kill), or 'idle'. Single source of truth for the queue badges and
+    the home-page alert banner.
+    """
+    if prog.get("finished"):
+        return "finished"
+    if running:
+        return "running"
+    if prog.get("total") and prog.get("done", 0) < prog["total"]:
+        return "abnormal"
+    return "idle"
+
+
 def queue_progress_html(prog, running, escape):
     """Render queue progress. escape is injected to avoid a UI-module cycle."""
     total, done, cur = prog["total"], prog["done"], prog["current"]
     pct = int(done * 100 / total) if total else 0
-    if prog["finished"]:
+    outcome = queue_outcome(prog, running)
+    if outcome == "finished":
         head = f'<span class="badge ok">finished</span> {escape(prog["finished"])}'
-    elif running:
+    elif outcome == "running":
         head = (f'<span class="badge running">running</span> '
                 f'image {done + 1} of {total or "?"}')
-    elif total and done < total:
+    elif outcome == "abnormal":
         # No "queue finished" marker, process not alive, work left undone: the
         # queue exited abnormally (crash or kill). Surface it loudly instead of
         # a green "idle" so a dead multi-image run isn't mistaken for complete.

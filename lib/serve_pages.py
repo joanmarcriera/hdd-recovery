@@ -32,6 +32,7 @@ from lib.serve_pipeline import (
 )
 from lib.serve_queue_log import (
     collapse_queue_noise as _collapse_queue_noise,
+    queue_outcome as _queue_outcome,
     queue_progress_cached as _queue_progress_cached,
     queue_progress_html as _queue_progress_html_impl,
 )
@@ -178,6 +179,32 @@ _HOME_CACHE: dict[str, tuple[float, str]] = {}
 _HOME_CACHE_TTL = 5.0
 
 
+def queue_alert_banner(root):
+    """Red home-page banner when the most recent queue ended abnormally — process
+    gone, no "queue finished" marker, images left undone (a crash or kill). The
+    home page otherwise shows nothing for a dead queue, so a multi-day run that
+    died mid-way reads as 'done' (the 2026-06-23 incident). Best-effort."""
+    try:
+        logs = sorted(glob.glob(os.path.join(_queue_log_dir(root), "queue-*.log")),
+                      key=os.path.getmtime, reverse=True)
+        if not logs:
+            return ""
+        latest = logs[0]
+        prog = _queue_progress_cached(latest)
+        if _queue_outcome(prog, bool(queue_active(root)[0])) != "abnormal":
+            return ""
+        enc = urllib.parse.quote(latest)
+        return (
+            '<div class="panel" style="border-left:4px solid #cc2222">'
+            '<span class="badge failed">queue ended abnormally</span> &nbsp; '
+            f'the last queue stopped after {prog["done"]} of {prog["total"]} '
+            'image(s) without finishing (crash or kill). '
+            f'<a href="/queue_log?log={enc}">view log</a> &nbsp;&middot;&nbsp; '
+            '<a href="/queue">re-launch the queue</a></div>')
+    except Exception:
+        return ""
+
+
 def page_home(root):
     cached = _HOME_CACHE.get(root)
     if cached and (time.monotonic() - cached[0]) < _HOME_CACHE_TTL:
@@ -240,7 +267,9 @@ def page_home(root):
                 f'</div>'
             )
 
-    body = f"""{storage_banner}{mem_panel()}{pipeline_banner}<div class="panel">
+    queue_alert = queue_alert_banner(root)
+
+    body = f"""{storage_banner}{mem_panel()}{queue_alert}{pipeline_banner}<div class="panel">
       <p class="count" style="display:flex;justify-content:space-between;align-items:center">
         <span>{len(dbs)} image(s) found under <code>{h(root)}</code></span>
         <span>
