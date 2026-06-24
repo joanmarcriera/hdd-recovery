@@ -113,9 +113,15 @@ def _db_path_for_image(image_path: Path, web_root: str, db_paths: list[str]) -> 
     this path explicitly, so shell config defaults cannot accidentally move it.
     """
     suffix = os.environ.get("DB_SUFFIX", DB_SUFFIX)
+    # An existing beside-image DB is always canonical for that image — reuse it
+    # even when the search set hasn't surfaced it, so a later init never writes a
+    # duplicate empty stub at DB_ROOT (the "no progress" duplicate bug).
+    beside = str(image_path) + suffix
+    if os.path.isfile(beside):
+        return beside
     image_dir = _real(image_path.parent)
     if any(_real(Path(db).parent) == image_dir for db in db_paths):
-        return str(image_path) + suffix
+        return beside
 
     env_db = os.environ.get("DB_ROOT")
     if env_db:

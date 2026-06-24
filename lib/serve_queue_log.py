@@ -117,6 +117,13 @@ def queue_progress_html(prog, running, escape):
     elif running:
         head = (f'<span class="badge running">running</span> '
                 f'image {done + 1} of {total or "?"}')
+    elif total and done < total:
+        # No "queue finished" marker, process not alive, work left undone: the
+        # queue exited abnormally (crash or kill). Surface it loudly instead of
+        # a green "idle" so a dead multi-image run isn't mistaken for complete.
+        head = (f'<span class="badge failed">ended abnormally</span> '
+                f'stopped after {done} of {total} image(s) without finishing — '
+                f're-launch the queue to resume the rest')
     else:
         head = '<span class="badge ok">idle</span>'
     bar = (f'<div style="background:#222;border-radius:4px;height:10px;margin:8px 0;'

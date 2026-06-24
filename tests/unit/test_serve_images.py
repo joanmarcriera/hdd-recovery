@@ -70,6 +70,42 @@ class TestServeImages(unittest.TestCase):
                 os.path.join(db_root, "disk.img.analysis.sqlite"),
             )
 
+    def test_db_path_prefers_existing_beside_db_over_db_root_stub(self):
+        # Regression: a beside-image DB already holds the analysis. Even with
+        # DB_ROOT set (Docker split layout) and the search set not yet aware of
+        # it, discovery must reuse the beside-image DB, never assign a fresh
+        # DB_ROOT path that a later init turns into an empty "no progress" stub.
+        with tempfile.TemporaryDirectory() as root:
+            images = Path(root) / "images"
+            images.mkdir()
+            image = images / "disk.img"
+            image.touch()
+            beside = str(image) + ".analysis.sqlite"
+            _write_db(beside, str(image))
+            db_root = Path(root) / "db"
+            db_root.mkdir()
+            with mock.patch.dict(os.environ, {"DB_ROOT": str(db_root)}, clear=True):
+                # Empty db_paths simulates the beside DB being outside the search set.
+                chosen = imgmod._db_path_for_image(image, root, [])
+            self.assertEqual(chosen, beside)
+
+    def test_discover_marks_beside_db_image_registered_with_db_root_set(self):
+        # End-to-end: an image with a populated beside-image DB must come back
+        # registered (pointing at that DB), so the UI won't offer to re-init it
+        # into a DB_ROOT stub.
+        with tempfile.TemporaryDirectory() as root, self._env(root, DB_ROOT=os.path.join(root, "db")):
+            images = os.path.join(root, "images")
+            os.makedirs(images)
+            os.makedirs(os.path.join(root, "db"))
+            image = os.path.join(images, "disk.img")
+            Path(image).write_bytes(b"data")
+            _write_db(image + ".analysis.sqlite", image)
+
+            found = [c for c in imgmod.discover_images(root) if c.image_path == image]
+            self.assertEqual(len(found), 1)
+            self.assertTrue(found[0].registered)
+            self.assertEqual(found[0].db_path, image + ".analysis.sqlite")
+
     def test_initialize_invokes_init_script_with_explicit_paths(self):
         candidate = imgmod.ImageCandidate(
             image_path="/data/images/disk.img",

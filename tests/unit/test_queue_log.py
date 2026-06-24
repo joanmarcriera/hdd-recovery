@@ -7,6 +7,7 @@ import unittest
 from _loader import load_module
 
 srv = load_module("bin/image-serve.py")
+qlog = load_module("lib/serve_queue_log.py")
 
 
 def _sample_log(done=3, total=9, running=True):
@@ -54,6 +55,32 @@ class TestScanProgress(unittest.TestCase):
         p = self._scan(text)
         self.assertIn("9 ok", p["finished"])
         self.assertIsNone(p["current"])
+
+
+class TestQueueProgressHtml(unittest.TestCase):
+    def _prog(self, **kw):
+        base = {"total": 0, "started": 0, "done": 0, "current": None,
+                "finished": "", "first_ts": "t", "last_ts": "t", "stages": ""}
+        base.update(kw)
+        return base
+
+    def test_finished_run_shows_finished(self):
+        html = qlog.queue_progress_html(
+            self._prog(total=9, done=9, finished="9 ok, 0 failed"),
+            False, lambda s: s)
+        self.assertIn("finished", html)
+
+    def test_dead_and_incomplete_flags_abnormal_end(self):
+        # Crashed/killed mid-run: work started, no "queue finished" line, the
+        # process is not alive. Must NOT read as a clean green "idle".
+        html = qlog.queue_progress_html(
+            self._prog(total=11, started=5, done=5), False, lambda s: s)
+        self.assertIn("abnormal", html.lower())
+        self.assertNotIn('badge ok">idle', html)
+
+    def test_no_work_started_is_idle(self):
+        html = qlog.queue_progress_html(self._prog(total=0), False, lambda s: s)
+        self.assertIn("idle", html.lower())
 
 
 class TestCollapseNoise(unittest.TestCase):

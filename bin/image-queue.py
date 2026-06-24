@@ -25,6 +25,7 @@ import os
 import subprocess
 import sys
 import time
+import traceback
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
@@ -139,20 +140,29 @@ def main() -> int:
     stopped_by_request = False
     if jobs == 1:
         for db in args.dbs:
-            heartbeat_env_runs(progress=True)
-            if env_stop_requested():
-                stopped_by_request = True
-                print(f"[{utc_now()}] queue stop requested: not starting another image", flush=True)
-                break
-            rcs.append(run_one(db, stages, args.skip_done, args.keep_going,
-                               args.stage_timeout, args.stage_idle_timeout,
-                               args.stage_progress_timeout,
-                               args.stage_progress_interval,
-                               args.require_prereqs))
-            if env_stop_requested():
-                stopped_by_request = True
-                print(f"[{utc_now()}] queue stop requested: not starting another image", flush=True)
-                break
+            # Defense-in-depth: no single image (or a transient supervision
+            # error) may abort a multi-day queue. Log loudly and move on; the
+            # per-DB sqlite guards live in lib/supervised.py.
+            try:
+                heartbeat_env_runs(progress=True)
+                if env_stop_requested():
+                    stopped_by_request = True
+                    print(f"[{utc_now()}] queue stop requested: not starting another image", flush=True)
+                    break
+                rcs.append(run_one(db, stages, args.skip_done, args.keep_going,
+                                   args.stage_timeout, args.stage_idle_timeout,
+                                   args.stage_progress_timeout,
+                                   args.stage_progress_interval,
+                                   args.require_prereqs))
+                if env_stop_requested():
+                    stopped_by_request = True
+                    print(f"[{utc_now()}] queue stop requested: not starting another image", flush=True)
+                    break
+            except Exception:  # noqa: BLE001 - keep the queue alive across images
+                rcs.append(1)
+                print(f"[{utc_now()}] queue: unexpected error on {Path(db).name}, "
+                      f"continuing to next image:\n{traceback.format_exc()}", flush=True)
+                continue
     else:
         with ThreadPoolExecutor(max_workers=jobs) as ex:
             db_iter = iter(args.dbs)
