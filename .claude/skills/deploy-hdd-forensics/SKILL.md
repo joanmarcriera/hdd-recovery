@@ -111,6 +111,30 @@ ssh truenas_admin@192.168.0.5 'sudo docker exec ix-hdd-forensics-hdd-forensics-1
   DB out of `images/`) — the old code stops seeing it immediately.
 - **Don't interrupt a running queue** to deploy a non-urgent change. See
   [[queue-stops-after-first-image-investigation]] for queue behavior.
+## Health-check a running queue
+
+One command answers "is the multi-day queue still healthy?" — alive + which
+image/stage, a real tool actually working, no crash, no duplicate stubs:
+
+```bash
+ssh truenas_admin@192.168.0.5 'sudo docker exec ix-hdd-forensics-hdd-forensics-1 bash -lc "
+  ps -e -o etime,args | grep \"[i]mage-queue.py --jobs\" | head -1   # alive + elapsed (empty = NOT running)
+  L=\$(ls -t /mnt/recovery16tb/recovery/queue-logs/queue-*.log | head -1)
+  grep -aE \"START |\[[0-9]+/[0-9]+\]|-> ok|-> failed|queue finished|ended abnormally|Traceback\" \$L | grep -avE \"mh_html|charset\" | tail -8
+  ps -e -o pid,pcpu,comm | grep -iE \"scalpel|foremost|bulk_ext|fiwalk|photorec|recoverjpeg\" | head -3  # a real tool burning CPU
+  ls /mnt/recovery16tb/recovery/db/*.sqlite 2>/dev/null && echo STUB-REGRESSION || echo db-empty-good
+"'
+```
+
+Read it as: **good** = a `--jobs` process with growing elapsed time, recent
+`START`/`[n/33]`/`-> ok` markers, a forensic binary at high `%CPU`, and
+`db-empty-good`. **Bad** = no `--jobs` line (queue died — check the log tail for
+`Traceback`/`ended abnormally`, then re-launch from the web `/queue` page), or
+`STUB-REGRESSION` (the duplicate-stub fix regressed). For duplicate detection,
+the one-liner from the smoke-test section (`find_databases` → duplicate
+basenames) still applies. The home page also shows a red "ended abnormally"
+banner if the latest queue died.
+
 - **Smoke-test the pipeline on a small image after deploying** — unit tests miss
   things that only surface end-to-end. Pick the smallest unprocessed `.img`,
   clean any stray `recovery/db/*.sqlite` stubs, and run a bounded queue:
