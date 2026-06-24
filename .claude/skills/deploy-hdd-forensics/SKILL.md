@@ -41,12 +41,22 @@ ssh marc@optiplex990 'cd ~/hdd-recovery && git pull --ff-only && ./docker/build-
 
 Run the build in the background and tail it — most layers are cached so it
 usually finishes in well under a minute, but a Dockerfile/apt change rebuilds
-the Kali base and takes many minutes:
+the Kali base and takes many minutes. **Pull and build as SEPARATE steps:**
 
 ```bash
+# a) Pull first, in the FOREGROUND, and confirm HEAD — do NOT chain it with the
+#    backgrounded build. `git pull && nohup build &` backgrounds the whole
+#    compound, so the build can race the pull and bake the OLD sha.
+ssh marc@optiplex990 'cd ~/hdd-recovery && git pull --ff-only 2>&1 | tail -3; git rev-parse --short HEAD'
+# b) Then build in the background.
 ssh marc@optiplex990 'cd ~/hdd-recovery && nohup ./docker/build-and-push.sh > /tmp/hdd-build.log 2>&1 & echo PID $!'
-ssh marc@optiplex990 'tail -30 /tmp/hdd-build.log'   # look for "Done. Pushed:"
+ssh marc@optiplex990 'tail -6 /tmp/hdd-build.log'   # look for "Done. Pushed:" + :<sha> == HEAD
 ```
+
+**`git pull --ff-only` aborts on stray untracked files** ("would be overwritten
+by merge", e.g. a `docs/superpowers/plans/*.md` the build wrote locally). Move
+the named file aside, then re-pull:
+`ssh marc@optiplex990 'cd ~/hdd-recovery && mv <file> /tmp/ && git pull --ff-only'`.
 
 ## Step 3 — make the runtime pull the new image (DOES NOT happen automatically)
 
@@ -66,14 +76,28 @@ image kills whatever is running inside — **including a live analysis queue.**
   **prefer to defer the redeploy** until the queue finishes, or apply the fix
   operationally on the live container instead of recreating it.
 
-Recreate the app via the TrueNAS UI (Apps → hdd-forensics → restart/redeploy) or
-`docker pull joanmarcriera/hdd-forensics:latest` + recreate the compose service.
-Do not do this unprompted while a queue is running — confirm with the operator.
-
-## Step 4 — verify
+**The reliable redeploy (tested):** TrueNAS caches the image digest and reports
+`image_updates_available: false`, so a plain redeploy reuses the stale local
+image. Force the new image, then recreate the app:
 
 ```bash
-curl -s http://192.168.0.5:7788/status | grep -i version   # should show the new :<sha>-<date>
+ssh truenas_admin@192.168.0.5 'sudo docker pull joanmarcriera/hdd-forensics:latest'
+ssh truenas_admin@192.168.0.5 'sudo midclt call app.redeploy hdd-forensics'   # returns a job id
+```
+
+`app.redeploy` runs as a middleware job (≈15–20 s). The container name is
+`ix-hdd-forensics-hdd-forensics-1`; its compose lives under
+`/mnt/.ix-apps/app_configs/hdd-forensics/`. Do this unprompted only when the
+operator asked — recreating kills a live queue (which resumes via `--skip-done`).
+
+## Step 4 — verify the new code is actually live
+
+```bash
+# image id of the running container must equal the freshly-pulled :latest id:
+ssh truenas_admin@192.168.0.5 'sudo docker inspect ix-hdd-forensics-hdd-forensics-1 --format "{{.Image}}"'
+ssh truenas_admin@192.168.0.5 'sudo docker image inspect joanmarcriera/hdd-forensics:latest --format "{{.Id}}"'
+# or grep a code marker straight from the running container:
+ssh truenas_admin@192.168.0.5 'sudo docker exec ix-hdd-forensics-hdd-forensics-1 grep -c "<a string from your change>" /root/hdd-recovery/<file>'
 ```
 
 ## Gotchas learned the hard way
@@ -87,3 +111,19 @@ curl -s http://192.168.0.5:7788/status | grep -i version   # should show the new
   DB out of `images/`) — the old code stops seeing it immediately.
 - **Don't interrupt a running queue** to deploy a non-urgent change. See
   [[queue-stops-after-first-image-investigation]] for queue behavior.
+- **Smoke-test the pipeline on a small image after deploying** — unit tests miss
+  things that only surface end-to-end. Pick the smallest unprocessed `.img`,
+  clean any stray `recovery/db/*.sqlite` stubs, and run a bounded queue:
+  ```bash
+  sudo docker exec -d ix-hdd-forensics-hdd-forensics-1 bash -lc '
+    python3 /root/hdd-recovery/bin/image-queue.py --jobs 1 --skip-done --keep-going \
+      --stage-timeout 1800 \
+      --stages init-db,structure-scan,index-tsk,detect-wallets,detect-pictures,bulk-extractor-raw,carve-foremost,generate-report \
+      <db1> <db2> > /mnt/recovery16tb/recovery/queue-logs/test-queue-$(date -u +%Y%m%dT%H%M%SZ).log 2>&1 &'
+  ```
+  Then poll the log for `queue finished: N ok, 0 failed`, confirm `recovery/db/`
+  stays empty (no new stubs), and that `find_databases` shows no duplicate
+  basenames. This loop caught the `init-db` DB_ROOT-stub bug and a latent
+  `printf '-'` crash in `generate-report` that no unit test would have. Name test
+  logs `test-queue-*.log` so they don't match the UI's `queue-*.log` glob; remove
+  them when done.
