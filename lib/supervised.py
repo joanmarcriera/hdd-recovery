@@ -6,6 +6,7 @@ import os
 import signal
 import sqlite3
 import socket
+import sys
 from dataclasses import dataclass
 
 from lib.runs import pid_alive
@@ -342,18 +343,37 @@ def decode_env(value: str | None = None) -> list[tuple[str, int]]:
     return out
 
 
+def _warn_env_run(where: str, db_path: str, exc: Exception) -> None:
+    """A tracking DB that vanished or can't be opened must never abort a queue.
+
+    Regression guard for the 2026-06-23 incident: a tracked DB was moved off
+    disk, ``sqlite3.connect`` raised ``OperationalError`` inside the queue's
+    inter-image ``env_stop_requested`` tick, and the unhandled exception killed
+    a multi-day queue with images still pending. These per-DB failures are
+    logged and skipped instead.
+    """
+    sys.stderr.write(f"[supervised] {where}: skipping {db_path}: {exc}\n")
+
+
 def env_stop_requested(value: str | None = None) -> bool:
-    """Return True if any supervised run from SUPERVISED_RUNS requested stop."""
+    """Return True if any supervised run from SUPERVISED_RUNS requested stop.
+
+    Unreadable tracking DBs are skipped (treated as "no stop"), never raised.
+    """
     for db_path, run_id in decode_env(value):
-        ensure_supervised_schema(db_path)
-        conn = sqlite3.connect(db_path)
         try:
-            row = conn.execute(
-                "SELECT cancel_requested FROM supervised_runs WHERE id=?",
-                (run_id,),
-            ).fetchone()
-        finally:
-            conn.close()
+            ensure_supervised_schema(db_path)
+            conn = sqlite3.connect(db_path)
+            try:
+                row = conn.execute(
+                    "SELECT cancel_requested FROM supervised_runs WHERE id=?",
+                    (run_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            _warn_env_run("env_stop_requested", db_path, exc)
+            continue
         if row and int(row[0] or 0):
             return True
     return False
@@ -361,11 +381,17 @@ def env_stop_requested(value: str | None = None) -> bool:
 
 def heartbeat_env_runs(*, progress: bool = False) -> None:
     for db_path, run_id in decode_env():
-        update_supervised_heartbeat(db_path, run_id, progress=progress)
+        try:
+            update_supervised_heartbeat(db_path, run_id, progress=progress)
+        except sqlite3.Error as exc:
+            _warn_env_run("heartbeat_env_runs", db_path, exc)
 
 
 def finish_env_runs(status: str, *, exit_code: int | None = None, notes: str = "") -> None:
     if os.environ.get("SUPERVISED_FINISH_DISABLED") == "1":
         return
     for db_path, run_id in decode_env():
-        finish_supervised_run(db_path, run_id, status, exit_code=exit_code, notes=notes)
+        try:
+            finish_supervised_run(db_path, run_id, status, exit_code=exit_code, notes=notes)
+        except sqlite3.Error as exc:
+            _warn_env_run("finish_env_runs", db_path, exc)

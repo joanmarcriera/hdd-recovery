@@ -115,6 +115,35 @@ class TestSupervisedRuns(unittest.TestCase):
                 p.terminate()
             p.wait()
 
+    # --- Resiliency: a vanished/unopenable tracking DB must not crash the queue.
+    # Regression for the 2026-06-23 incident where env_stop_requested raised
+    # sqlite3.OperationalError ("unable to open database file") after a tracked
+    # DB was moved off disk, aborting a multi-day queue with images still pending.
+    _BAD_DB = "/nonexistent-dir-hdd-recovery-test/missing.analysis.sqlite"
+
+    def test_env_stop_requested_tolerates_unopenable_db(self):
+        self.assertFalse(sup.env_stop_requested(sup.encode_env([(self._BAD_DB, 1)])))
+
+    def test_env_stop_requested_skips_bad_db_but_honors_valid_stop(self):
+        db = self._db()
+        run_id = sup.create_supervised_run(db, "queue", "image-queue.py", "/tmp/q.log")
+        self.assertTrue(sup.request_supervised_stop(db, run_id))
+        # Broken entry first, the real stop second: still detected, no raise.
+        env = sup.encode_env([(self._BAD_DB, 999), (db, run_id)])
+        self.assertTrue(sup.env_stop_requested(env))
+
+    def test_env_runs_helpers_tolerate_unopenable_db(self):
+        old = os.environ.get("SUPERVISED_RUNS")
+        os.environ["SUPERVISED_RUNS"] = sup.encode_env([(self._BAD_DB, 1)])
+        try:
+            sup.heartbeat_env_runs(progress=True)   # must not raise
+            sup.finish_env_runs("ok", exit_code=0)  # must not raise
+        finally:
+            if old is None:
+                os.environ.pop("SUPERVISED_RUNS", None)
+            else:
+                os.environ["SUPERVISED_RUNS"] = old
+
 
 if __name__ == "__main__":
     unittest.main()
