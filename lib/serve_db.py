@@ -93,4 +93,30 @@ def find_databases(root, max_depth=_DISCOVERY_MAX_DEPTH):
         for fn in filenames:
             if fn.endswith(".analysis.sqlite"):
                 found.append(os.path.join(dirpath, fn))
-    return sorted(set(found))
+    return _dedupe_same_image(sorted(set(found)))
+
+
+def _scan_run_count(db_path):
+    """scan_runs row count, or -1 if the DB is unreadable/has no such table
+    (so empty stubs sort below any DB that holds real history)."""
+    n = query_scalar(db_path, "SELECT COUNT(*) FROM scan_runs", default=None)
+    return -1 if n is None else int(n)
+
+
+def _dedupe_same_image(paths):
+    """Collapse DBs that share an image basename — the dual-layout collision
+    where one image has both a populated beside-image DB (``images/``) and an
+    empty ``DB_ROOT`` stub (``db/``) created by a later catalog scan. Keep the
+    copy with the most scan history so an empty stub never appears as a phantom
+    "no progress" duplicate or hides real results. Different images (distinct
+    basenames, e.g. two USB sticks of the same model) are left untouched."""
+    groups = {}
+    for path in paths:
+        groups.setdefault(os.path.basename(path), []).append(path)
+    kept = []
+    for group in groups.values():
+        if len(group) == 1:
+            kept.append(group[0])
+        else:
+            kept.append(max(group, key=lambda p: (_scan_run_count(p), p)))
+    return sorted(kept)

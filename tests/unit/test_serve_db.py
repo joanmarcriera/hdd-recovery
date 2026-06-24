@@ -78,6 +78,37 @@ class TestFindDatabases(unittest.TestCase):
             self.assertEqual(
                 found, [os.path.join(images, "disk.img.analysis.sqlite")])
 
+    def test_dedupes_same_image_across_layouts_keeping_history(self):
+        # Dual-layout collision: the same image gets a DB both beside the image
+        # (images/) and at DB_ROOT (db/). The empty stub must not show as a
+        # phantom "no progress" duplicate — keep the copy with real scan history.
+        def _make(path, runs):
+            conn = sqlite3.connect(path)
+            conn.execute("CREATE TABLE scan_runs(id INTEGER PRIMARY KEY, "
+                         "stage TEXT, status TEXT, started_at TEXT)")
+            for i in range(runs):
+                conn.execute("INSERT INTO scan_runs(stage,status,started_at) "
+                             "VALUES('s','ok',?)", (str(i),))
+            conn.commit()
+            conn.close()
+
+        with tempfile.TemporaryDirectory() as root:
+            db_dir = os.path.join(root, "db")
+            img_dir = os.path.join(root, "images")
+            os.makedirs(db_dir)
+            os.makedirs(img_dir)
+            stub = os.path.join(db_dir, "disk.img.analysis.sqlite")
+            real = os.path.join(img_dir, "disk.img.analysis.sqlite")
+            _make(stub, 0)
+            _make(real, 12)
+
+            # A genuinely different image (different basename) is NOT collapsed.
+            other = os.path.join(img_dir, "other.img.analysis.sqlite")
+            _make(other, 3)
+
+            found = dbmod.find_databases(root)
+            self.assertEqual(found, sorted([real, other]))
+
 
 if __name__ == "__main__":
     unittest.main()
