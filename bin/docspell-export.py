@@ -40,7 +40,7 @@ if str(ROOT) not in sys.path:
 
 from lib import harvest  # noqa: E402
 from lib.db import open_writable_db  # noqa: E402
-from lib.exportlog import exported_refs, record_export  # noqa: E402
+from lib.exportlog import EXPORTS_DDL, exported_refs, record_export  # noqa: E402
 from lib.timestamp import utc_now  # noqa: E402
 from lib.upload_http import http_upload_file  # noqa: E402
 
@@ -95,7 +95,7 @@ def process_db(db_path, args, url, headers, seen_sha, writer):
     label = harvest.db_disk_label(db_path)
     docs = harvest.curated_docs(db_path, min_size=args.min_size,
                                 include_text=args.include_text)
-    conn = open_writable_db(db_path)
+    conn = open_writable_db(db_path, ddl=EXPORTS_DDL)
     try:
         done = exported_refs(conn, SOURCE_KIND)
         acted = failed = deduped = 0

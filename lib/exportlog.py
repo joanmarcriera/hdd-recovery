@@ -11,6 +11,24 @@ from __future__ import annotations
 
 from lib.timestamp import utc_now
 
+# Catalogs created before the `exports` table was added to analysis-schema.sql
+# would raise "no such table: exports" on the first record_export, aborting a
+# disk mid-export. The exporters pass this to open_writable_db (idempotent) so
+# provenance always has somewhere to land.
+EXPORTS_DDL = """
+CREATE TABLE IF NOT EXISTS exports (
+  id INTEGER PRIMARY KEY,
+  source_kind TEXT NOT NULL,
+  source_ref TEXT,
+  relative_path TEXT NOT NULL,
+  full_path TEXT NOT NULL,
+  sha256 TEXT,
+  size_bytes INTEGER,
+  created_at TEXT NOT NULL,
+  notes TEXT
+);
+"""
+
 
 def already_exported(conn, source_kind, source_ref):
     """True if this artifact was already pushed by this exporter."""

@@ -39,7 +39,7 @@ if str(ROOT) not in sys.path:
 
 from lib import harvest  # noqa: E402
 from lib.db import open_writable_db  # noqa: E402
-from lib.exportlog import exported_refs, record_export  # noqa: E402
+from lib.exportlog import EXPORTS_DDL, exported_refs, record_export  # noqa: E402
 from lib.timestamp import utc_now  # noqa: E402
 from lib.upload_http import http_json, http_upload_file  # noqa: E402
 
@@ -133,7 +133,7 @@ def process_db(db_path, args, base, headers, album_cache, writer):
     for p in photos:
         p["_label"] = label
 
-    conn = open_writable_db(db_path)
+    conn = open_writable_db(db_path, ddl=EXPORTS_DDL)
     try:
         done = exported_refs(conn, SOURCE_KIND)
         pending = [p for p in photos if device_asset_id(label, p) not in done]
@@ -150,25 +150,41 @@ def process_db(db_path, args, base, headers, album_cache, writer):
         if not args.run:
             return len(pending), 0, total_bytes
 
-        album_id = resolve_album(base, headers, album_name, album_cache)
-        uploaded, asset_ids, failed = 0, [], 0
+        # Fail fast if the album can't be resolved — don't upload orphans.
+        try:
+            album_id = resolve_album(base, headers, album_name, album_cache)
+        except RuntimeError as e:
+            log(f"  ! {label}: {e}; skipping disk")
+            return 0, len(pending), total_bytes
+
+        # Upload first, collect ids, THEN add to the album, and only record
+        # provenance once the album-add confirms. If the album-add fails we
+        # record nothing, so a re-run retries it (Immich returns the same asset
+        # id for the duplicate re-upload, so recovery is idempotent).
+        uploaded_rows, failed = [], 0
         for p in pending:
             asset_id, note = upload_one(base, headers, p)
             if asset_id:
-                asset_ids.append(asset_id)
-                record_export(conn, SOURCE_KIND, device_asset_id(label, p),
-                              p.get("relative_path"), p["full_path"],
-                              sha256=p.get("sha256"), size_bytes=p.get("size_bytes"),
-                              notes=f"album={album_name} asset={asset_id} status={note}")
-                uploaded += 1
+                uploaded_rows.append((asset_id, p, note))
             else:
                 failed += 1
                 log(f"  ! {os.path.basename(p['full_path'])}: {note}")
-        if asset_ids:
+
+        uploaded = 0
+        if uploaded_rows:
+            asset_ids = [aid for aid, _, _ in uploaded_rows]
             st, body = http_json("PUT", f"{base}/api/albums/{album_id}/assets",
                                  headers=headers, json_body={"ids": asset_ids})
-            if st not in (200, 201):
-                log(f"  ! album add failed ({st}): {body}")
+            if st in (200, 201):
+                for asset_id, p, note in uploaded_rows:
+                    record_export(conn, SOURCE_KIND, device_asset_id(label, p),
+                                  p.get("relative_path"), p["full_path"],
+                                  sha256=p.get("sha256"), size_bytes=p.get("size_bytes"),
+                                  notes=f"album={album_name} asset={asset_id} status={note}")
+                    uploaded += 1
+            else:
+                log(f"  ! album add failed ({st}): {body}; provenance not "
+                    f"recorded, re-run will retry")
         log(f"{label}: uploaded {uploaded}, failed {failed}")
         return uploaded, failed, total_bytes
     finally:
