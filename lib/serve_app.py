@@ -43,6 +43,7 @@ from lib.serve_pages import (  # noqa: E402
     page_findings,
     page_help,
     page_home,
+    page_inventory,
     page_new_images,
     page_mapview,
     page_pictures,
@@ -188,6 +189,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 self.send_html(page_home(self.root))
             elif p == "/help":
                 self.send_html(page_help(self.root))
+            elif p == "/inventory":
+                self.send_html(page_inventory(self.root))
             elif p == "/images/new":
                 self.send_html(page_new_images(self.root))
             elif p == "/db":

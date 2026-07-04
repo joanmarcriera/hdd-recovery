@@ -37,6 +37,8 @@ from lib.serve_queue_log import (
     queue_progress_html as _queue_progress_html_impl,
 )
 from lib.serve_ui import badge, h, human_size as _human_size, mem_panel, page, table_html
+from lib.inventory import collect_inventory
+from lib.timestamp import utc_now
 
 BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
 
@@ -277,8 +279,10 @@ def page_home(root):
              title="Find finished .img files, initialise missing DBs, and optionally start the fast scan">Scan for new images</a>
           <a href="/help" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7;margin-right:6px"
              title="How to acquire a new disk image (ddrescue, failing disks, USB) and register it here">&#43; Add image / Help</a>
-          <a href="/queue" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7"
+          <a href="/queue" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7;margin-right:6px"
              title="Queue fast/carve/etc. across multiple images">&#9654; Queue work</a>
+          <a href="/inventory" style="background:#0f3460;padding:4px 12px;border-radius:3px;color:#7eb8f7"
+             title="Cross-image totals, per-disk breakdown, and top wallet/encrypted hits">&#128202; Inventory</a>
         </span>
       </p>
       <table style="margin-top:10px">
@@ -292,6 +296,113 @@ def page_home(root):
     head_extra = '<meta http-equiv="refresh" content="20">' if pipeline_banner else ""
     html_out = page("Recovery Dashboard", body, head_extra=head_extra)
     _HOME_CACHE[root] = (time.monotonic(), html_out)
+    return html_out
+
+
+# Cross-image inventory is a heavier scan (opens every catalog); cache a little
+# longer than the home page so a reload doesn't re-walk all DBs each time.
+_INVENTORY_CACHE: dict[str, tuple[float, str]] = {}
+_INVENTORY_CACHE_TTL = 15.0
+
+
+def _inv_table(headers, rows, aligns=None):
+    """Render a simple HTML table; aligns is an optional list of 'r'/'c'/'l'."""
+    aligns = aligns or ["l"] * len(headers)
+    style = {"r": "text-align:right", "c": "text-align:center", "l": ""}
+    head = "".join(f"<th>{h(c)}</th>" for c in headers)
+    body = ""
+    for row in rows:
+        cells = "".join(
+            f'<td style="{style.get(a, "")}">{c}</td>'
+            for c, a in zip(row, aligns))
+        body += f"<tr>{cells}</tr>"
+    return f'<div style="overflow-x:auto"><table><tr>{head}</tr>{body}</table></div>'
+
+
+def page_inventory(root):
+    """GET /inventory — aggregate totals + per-disk breakdown + top hits across
+    all catalogs. Mirrors bin/inventory-summary.py so the two never disagree."""
+    cached = _INVENTORY_CACHE.get(root)
+    if cached and (time.monotonic() - cached[0]) < _INVENTORY_CACHE_TTL:
+        return cached[1]
+
+    data = collect_inventory(root)
+    t = data["totals"]
+    if not data["disks"]:
+        body = (f'<div class="panel"><p class="count">No *.analysis.sqlite files '
+                f'found under <code>{h(root)}</code>.</p></div>')
+        return page("Inventory", body, nav_extra=" &rsaquo; inventory")
+
+    totals_rows = [
+        ("Images", f"{t['disks']:,}"),
+        ("Total image size", h(_human_size(t["image_size"]))),
+        ("Files inventoried", f"{t['files']:,}"),
+        ("Deleted files", f"{t['deleted']:,}"),
+        ("Recovered artifacts", f"{t['artifacts']:,}"),
+        ("Curated photos", f"{t['photos']:,}"),
+        ("Curated documents", f"{t['docs']:,}"),
+        ("Wallet candidates", f"{t['wallet_candidates']:,}"),
+        ("High-interest findings (score &ge; 70)", f"{t['findings_high']:,}"),
+        ("Encrypted-container findings", f"{t['encrypted']:,}"),
+    ]
+    bu = data["bulk_unique"]
+    for feat in ("bitcoin.txt", "ethereum.txt", "email.txt", "domain.txt"):
+        totals_rows.append((f"Unique <code>{h(feat)}</code> values (all disks)",
+                            f"{bu.get(feat, 0):,}"))
+    totals_html = _inv_table(["Metric", "Value"],
+                             [(m, v) for m, v in totals_rows], ["l", "r"])
+
+    disk_rows = []
+    for d in data["disks"]:
+        enc = urllib.parse.quote(d["db_path"])
+        disk_rows.append((
+            f'<a href="/db?db={enc}">{h(d["label"])}</a>',
+            h(_human_size(d["image_size"])),
+            f'{d["files"]:,}', f'{d["deleted"]:,}', f'{d["artifacts"]:,}',
+            f'{d["photos"]:,}', f'{d["docs"]:,}', f'{d["wallet_candidates"]:,}',
+            f'{d["findings_high"]:,}', f'{d["encrypted"]:,}',
+            h(str(d["last_run"])[:19]),
+        ))
+    disk_html = _inv_table(
+        ["Disk", "Size", "Files", "Deleted", "Artifacts", "Photos", "Docs",
+         "Wallets", "Hi-find", "Enc", "Last run"],
+        disk_rows, ["l", "r", "r", "r", "r", "r", "r", "r", "r", "r", "l"])
+
+    def _findings_panel(title, items, cols, keys, aligns):
+        if not items:
+            return ""
+        rows = [tuple(h(str(it.get(k, ""))) for k in keys) for it in items]
+        return (f'<div class="panel"><h2>{h(title)}</h2>'
+                f'{_inv_table(cols, rows, aligns)}</div>')
+
+    wallets_html = _findings_panel(
+        "Top wallet candidates (all disks)", data["top_wallets"],
+        ["Disk", "Score", "Reason", "Path", "Bytes", "Del"],
+        ["disk", "score", "reason", "path", "size_bytes", "deleted"],
+        ["l", "r", "l", "l", "r", "c"])
+    wfind_html = _findings_panel(
+        "Wallet / seed-phrase findings (all disks)", data["wallet_findings"],
+        ["Disk", "Category", "Key", "Value", "Score", "Path"],
+        ["disk", "category", "key", "value", "score", "path"],
+        ["l", "l", "l", "l", "r", "l"])
+    enc_html = _findings_panel(
+        "Encrypted containers (all disks)", data["encrypted"],
+        ["Disk", "Category", "Key", "Value", "Score", "Path"],
+        ["disk", "category", "key", "value", "score", "path"],
+        ["l", "l", "l", "l", "r", "l"])
+
+    body = f"""
+    <div class="panel">
+      <p class="count">Aggregated across {t['disks']} image(s) under
+        <code>{h(root)}</code> &middot; {h(utc_now())}.
+        Full report: <code>bin/inventory-summary.py</code> (writes md/json/csv).</p>
+    </div>
+    <div class="panel"><h2>Totals</h2>{totals_html}</div>
+    <div class="panel"><h2>Per-disk breakdown</h2>{disk_html}</div>
+    {wallets_html}{wfind_html}{enc_html}
+    """
+    html_out = page("Inventory", body, nav_extra=" &rsaquo; inventory")
+    _INVENTORY_CACHE[root] = (time.monotonic(), html_out)
     return html_out
 
 
