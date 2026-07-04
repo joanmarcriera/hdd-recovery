@@ -145,6 +145,16 @@ Every bin script sources this. Key functions:
 | `bin/image-export.sh <db> --file-id <id>` | Copy a specific file to `exports/` |
 | `bin/image-attach-ro.sh` / `bin/image-detach.sh` | Mount/unmount image read-only via loop device |
 
+### Consolidation / Export (cross-image)
+
+The only cross-image tools — they walk **every** `*.analysis.sqlite` under a root (reusing `find_databases`). `lib/harvest.py` holds the single shared definition of a "curated photo" (dedup primaries, size ≥ 20 KB, `quality_score` ≥ 30, jpeg/png/heic/heif/tiff/webp only) and a "curated document" (pdf/office/rtf/epub by MIME or TrID; `text/plain` opt-in), so inventory counts can never drift from what an exporter ships. Read-only against source images/recovered files; exporters write only external services + an `exports` provenance row and are resumable.
+
+| Script | Purpose |
+|--------|---------|
+| `bin/inventory-summary.py [--root <dir>] [--out-dir <dir>]` | Cross-image inventory: totals + per-disk breakdown + top wallets, wallet/seed findings, encrypted containers, unique bulk_extractor values. Writes additive `reports/inventory-<ts>.{md,json,csv}` (`lib/inventory.py`). Served at `/inventory`. |
+| `bin/immich-export.py [--db <path>] [--run] [--min-quality N] [--limit N]` | Upload curated photos to Immich, one album per disk. Dry-run by default; `--run` needs `IMMICH_INSTANCE_URL` + `IMMICH_API_KEY` (env only). Raw images never uploaded. |
+| `bin/docspell-export.py [--db <path>] [--run] [--include-text] [--limit N]` | Upload curated documents to Docspell, tagged by disk, sha256-deduped across disks. Dry-run by default; `--run` needs `DOCSPELL_URL` + `DOCSPELL_SOURCE_ID` (or `DOCSPELL_COLLECTIVE` + `DOCSPELL_INTEGRATION_SECRET`). Helpers in `lib/upload_http.py` / `lib/exportlog.py`. |
+
 ### Web UI (`bin/image-serve.py`)
 
 Started via the TUI or `python3 bin/image-serve.py --port 7788`. Routes:
@@ -152,6 +162,7 @@ Started via the TUI or `python3 bin/image-serve.py --port 7788`. Routes:
 | Route | Purpose |
 |-------|---------|
 | `/` | Home: all databases with file/artifact/wallet counts and a map icon link |
+| `/inventory` | Cross-image totals, per-disk breakdown, and top wallet/encrypted hits across all databases (mirrors `bin/inventory-summary.py`) |
 | `/db?db=<path>` | Database detail: image info, stage history, quick links |
 | `/mapview?db=<path>` | ddrescue map visualiser — reads `ddrescue_map_path` from `image_info` |
 | `/mapview?map=<path>` | ddrescue map visualiser — direct mapfile path, no DB required |
@@ -277,6 +288,20 @@ bin/image-ntfs-artifact-summary.sh $DB
 bin/image-photorec-run.sh $DB --profile broad
 bin/image-report.sh $DB
 ```
+
+### Consolidating Results Across Images
+
+Once several images are analysed, roll the whole haul up and push the good stuff into the tools where it's useful. All read-only against source media; exporters are dry-run by default and resumable (skip anything already in the `exports` table).
+
+```bash
+bin/inventory-summary.py --root "$DB_ROOT"                   # reports/inventory-<ts>.{md,json,csv}; also /inventory
+bin/immich-export.py --root "$DB_ROOT"                       # dry-run: counts + manifest
+IMMICH_INSTANCE_URL=http://nas:2283 IMMICH_API_KEY=… bin/immich-export.py --db "$DB" --run --limit 5
+bin/docspell-export.py --root "$DB_ROOT"                     # dry-run
+DOCSPELL_URL=http://nas:7880 DOCSPELL_SOURCE_ID=… bin/docspell-export.py --db "$DB" --run --limit 5
+```
+
+Secrets come from the environment only (never commit them).
 
 ### Stage Ordering Rule
 
