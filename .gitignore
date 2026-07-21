@@ -58,3 +58,8 @@ __pycache__/
 
 # Symlink into the ignored .agents tree (not portable)
 .claude/skills/bash-defensive-patterns
+
+# Recovered credential/wallet artifacts — NEVER commit (disk-recovery-programme rule)
+ALL_PASSWORDS*
+*wallet*
+electrum_*
