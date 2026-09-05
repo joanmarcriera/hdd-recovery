@@ -1,0 +1,6 @@
+# gitleaks false positives, pinned by fingerprint.
+# YARA rule text, not a key: crypto_keys.yar matches on the literal PEM header
+# strings it is designed to hunt for. Verified 2026-09-06.
+# Fingerprints are commit:file:rule:line, so a NEW secret in the same file
+# still fires — this only silences these exact reviewed findings.
+9eca3a7009e24820afb48781adfc737a856d3112:config/yara/crypto_keys.yar:private-key:67
