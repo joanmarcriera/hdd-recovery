@@ -5,7 +5,7 @@ Repo root, branch `main`. You have full git + network + can run the Textual TUI
 not push). Start here:
 
 ```bash
-cd ~/Development/repos/hdd-recovery
+cd ~/Development/Project/hdd-recovery
 git status
 ./tests/run-unit.sh          # baseline: 46 tests, OK
 ```
