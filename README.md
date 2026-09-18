@@ -392,3 +392,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, the test/lint commands, an
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+<!-- vikunja-tracking -->
+## Tracking
+
+Vikunja project **41 · BTC Wallet Recovery** — https://familia.riera.co.uk/projects/41
