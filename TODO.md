@@ -42,3 +42,10 @@ moved to `.archive/` (gitignored).
 - Cross-reference deleted-file recovery outputs with TSK indexed paths to detect allocated duplicates.
 - Cross-disk deduplication after human review only.
 - Formal `schema_version` tracking for migrations.
+
+## CLOSED 2026-09-29
+Disk imaging and the hdd-forensics pipeline are retired: every disk that needed imaging was imaged
+and the analysis did not find what was being searched for. The container/app is stopped (TrueNAS
+app `hdd-forensics` STOPPED; optiplex7040 container stopped, restart policy `no`). Forgejo repo
+archived (read-only). Images and analysis DBs stay on TrueNAS `BigDisk/CryptoBackup/recovery`
+(sensitive: never print findings values). To revive: start the TrueNAS app; see README.

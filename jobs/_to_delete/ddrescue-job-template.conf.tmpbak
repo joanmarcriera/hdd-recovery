@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Copy this file to /root/hdd-recovery/jobs/<jobname>.conf and fill it in.
+
+JOB_NAME=""
+DATE_TAG=""
+
+SOURCE_DEV=""
+SOURCE_BY_PATH=""
+SOURCE_MODEL=""
+SOURCE_SERIAL=""
+SOURCE_SIZE_BYTES=""
+
+DEST_MOUNT="/mnt/recovery16tb"
+IMAGES_DIR="$DEST_MOUNT/recovery/images"
+LOGS_DIR="$DEST_MOUNT/recovery/logs"
+MANIFESTS_DIR="$DEST_MOUNT/recovery/manifests"
+
+# Example:
+# BASENAME="${DATE_TAG}_${SOURCE_MODEL}_${SOURCE_SERIAL}_$(basename "$SOURCE_DEV")"
+BASENAME=""
+
+IMAGE_FILE="$IMAGES_DIR/${BASENAME}.img"
+MAP_FILE="$LOGS_DIR/${BASENAME}.map"
+EVENT_LOG="$LOGS_DIR/${BASENAME}.events.log"
+RATE_LOG="$LOGS_DIR/${BASENAME}.rates.log"
+MANIFEST_FILE="$MANIFESTS_DIR/${BASENAME}.yaml"
+
+# Conservative defaults. Adjust only with a reason.
+RETRY_PASSES="3"
+REVERSE_RETRY_PASSES="1"
+RETRIM_RETRY_PASSES="1"
+PAUSE_ON_ERROR="1s"
+MAPFILE_INTERVAL="30s,5s"
+

@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+# Job: WD Elements Desktop 1.5 TB (enclosure P/N WDBAAU0015HBK-01,
+# enclosure S/N WMAY01642541). Internal drive is a 3.5" WD Caviar Green
+# (typically WD15EARS/WD15EADS) — SHUCKED from the enclosure and connected
+# directly to SATA. Elements bridges do NOT encrypt, so the bare drive
+# reads identically to USB.
+# Notes for this disk:
+#   - The INTERNAL drive's model/serial (on its own label) go below —
+#     not the enclosure numbers above.
+#   - 3.5" drive: needs 5 V + 12 V. External PSU on the same power strip
+#     as the host; connect power before boot; never cut power mid-run.
+# Fill the ID fields from the live system BEFORE running:
+#   lsblk -o NAME,MODEL,SERIAL,SIZE; ls -l /dev/disk/by-path/
+#   smartctl -i /dev/sdX
+#   blockdev --getsize64 /dev/sdX
+
+JOB_NAME="wd-elements-1500gb"
+DATE_TAG="$(date +%Y%m%d)"
+
+SOURCE_DEV=""                       # e.g. /dev/sdd — FILL IN after lsblk
+SOURCE_BY_PATH=""                   # FILL IN from /dev/disk/by-path
+SOURCE_MODEL=""                     # internal drive model, e.g. WDC WD15EARS-00Z5B1
+SOURCE_SERIAL=""                    # internal drive serial (starts WD-WCAV/WMAV...)
+SOURCE_SIZE_BYTES="1500301910016"   # expected for 1.5 TB class; verify with blockdev
+
+DEST_MOUNT="/data"  # 990: 7.3T HGST "DATA1" (legacy path was /mnt/recovery16tb)
+IMAGES_DIR="$DEST_MOUNT/images"
+LOGS_DIR="$DEST_MOUNT/logs"
+MANIFESTS_DIR="$DEST_MOUNT/manifests"
+
+BASENAME="${DATE_TAG}_${SOURCE_MODEL}_${SOURCE_SERIAL}_$(basename "$SOURCE_DEV")"
+
+IMAGE_FILE="$IMAGES_DIR/${BASENAME}.img"
+MAP_FILE="$LOGS_DIR/${BASENAME}.map"
+EVENT_LOG="$LOGS_DIR/${BASENAME}.events.log"
+RATE_LOG="$LOGS_DIR/${BASENAME}.rates.log"
+MANIFEST_FILE="$MANIFESTS_DIR/${BASENAME}.yaml"
+
+# Conservative defaults. Adjust only with a reason.
+RETRY_PASSES="3"
+REVERSE_RETRY_PASSES="1"
+RETRIM_RETRY_PASSES="1"
+PAUSE_ON_ERROR="1s"
+MAPFILE_INTERVAL="30s,5s"
