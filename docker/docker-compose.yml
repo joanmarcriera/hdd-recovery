@@ -1,6 +1,9 @@
 services:
   hdd-forensics:
-    image: ${DOCKERHUB_USER:-joanmarcriera}/hdd-forensics:latest
+    # Pinned to the digest running on optiplex7040 (verified 2026-10-16) for reproducible recovery runs.
+    # To bump: docker pull joanmarcriera/hdd-forensics:latest, read the new RepoDigest, edit here.
+    # Override for a one-off: HDD_FORENSICS_IMAGE=joanmarcriera/hdd-forensics:latest docker compose up
+    image: ${HDD_FORENSICS_IMAGE:-joanmarcriera/hdd-forensics@sha256:3f29984d7b927c474d424fa870ef33a1effdfda23abc71b2c543810c17e23835}
     container_name: hdd-forensics
     hostname: hdd-forensics
     restart: unless-stopped
