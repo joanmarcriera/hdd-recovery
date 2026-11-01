@@ -11,9 +11,13 @@ CONFIG_FILE = Path(os.environ.get("HDD_RECOVERY_CONFIG", str(ROOT_DIR / "config/
 
 def _load_simple_env(path: Path) -> dict[str, str]:
     env: dict[str, str] = {}
-    if not path.exists():
+    try:
+        text = path.read_text()
+    except OSError:
+        # Missing, or unreadable (e.g. /root/... as a non-root CI user, where
+        # even stat() raises PermissionError). Fall back to the defaults.
         return env
-    for line in path.read_text().splitlines():
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
