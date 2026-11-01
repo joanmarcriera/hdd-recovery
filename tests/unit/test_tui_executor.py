@@ -6,15 +6,16 @@ import sys
 import unittest
 from pathlib import Path
 
-from _loader import REPO_ROOT
+from _loader import REPO_ROOT, isolate_tui_paths
 
 _TUI = str(REPO_ROOT / "tui")
 if _TUI not in sys.path:
     sys.path.insert(0, _TUI)
 
-import executor  # noqa: E402
-import state  # noqa: E402
-from stages import STAGES  # noqa: E402
+with isolate_tui_paths():
+    import executor  # noqa: E402
+    import state  # noqa: E402
+    from stages import STAGES  # noqa: E402
 
 STAGE = {s.key: s for s in STAGES}
 

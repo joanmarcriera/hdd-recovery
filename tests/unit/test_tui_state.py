@@ -9,14 +9,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from _loader import REPO_ROOT
+from _loader import REPO_ROOT, isolate_tui_paths
 
 _TUI = str(REPO_ROOT / "tui")
 if _TUI not in sys.path:
     sys.path.insert(0, _TUI)
 
-import state  # noqa: E402  (tui/state.py; needs tui/ on sys.path)
-from stages import STAGES  # noqa: E402
+with isolate_tui_paths():
+    import state  # noqa: E402  (tui/state.py; needs tui/ on sys.path)
+    from stages import STAGES  # noqa: E402
 
 S = state.StageStatus
 STAGE = {s.key: s for s in STAGES}

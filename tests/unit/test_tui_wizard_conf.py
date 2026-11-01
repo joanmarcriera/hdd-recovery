@@ -9,7 +9,7 @@ import types
 import unittest
 from pathlib import Path
 
-from _loader import REPO_ROOT, load_module
+from _loader import REPO_ROOT, isolate_tui_paths, load_module
 
 _TUI = str(REPO_ROOT / "tui")
 if _TUI not in sys.path:
@@ -46,8 +46,9 @@ try:
 except ImportError:
     _stub_textual()
 
-wizard = load_module("tui/screens/wizard.py")
-import config  # noqa: E402  (tui/config.py)
+with isolate_tui_paths():
+    wizard = load_module("tui/screens/wizard.py")
+    import config  # noqa: E402  (tui/config.py)
 
 BY_PATH = "/dev/disk/by-path/pci-0000:00:17.0-ata-3"
 
