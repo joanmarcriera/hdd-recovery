@@ -4,6 +4,7 @@ import os
 import sqlite3
 import subprocess
 import tempfile
+import time
 import unittest
 
 from _loader import REPO_ROOT, load_module
@@ -27,6 +28,24 @@ def _db(rows):
     return path
 
 
+def _spawn_sleep():
+    """Popen `sleep 30` and wait until its /proc cmdline is populated. Popen
+    returns once exec has closed the CLOEXEC error pipe, but the kernel sets
+    the new argv a moment later, so an immediate read can be empty and
+    pid_alive() then (correctly) reports the pid as not ours."""
+    p = subprocess.Popen(["sleep", "30"])
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            with open(f"/proc/{p.pid}/cmdline", "rb") as fh:
+                if fh.read():
+                    break
+        except OSError:
+            break              # no /proc (non-Linux): nothing to wait for
+        time.sleep(0.01)
+    return p
+
+
 def _statuses(db):
     conn = sqlite3.connect(db)
     out = dict(conn.execute("SELECT stage, status FROM scan_runs").fetchall())
@@ -41,7 +60,7 @@ class TestPidAlive(unittest.TestCase):
         self.assertFalse(runs.pid_alive(p.pid))
 
     def test_live_pid_marker_guard(self):
-        p = subprocess.Popen(["sleep", "30"])
+        p = _spawn_sleep()
         try:
             self.assertTrue(runs.pid_alive(p.pid, markers=("sleep",)))
             # alive, but cmdline doesn't match our markers → treat as not-ours
@@ -60,7 +79,7 @@ class TestReconcile(unittest.TestCase):
     def test_only_dead_running_rows_reconciled(self):
         dead = subprocess.Popen(["true"])
         dead.wait()
-        live = subprocess.Popen(["sleep", "30"])
+        live = _spawn_sleep()
         try:
             db = _db([
                 ("bulk", "running", dead.pid),   # dead pid → interrupted

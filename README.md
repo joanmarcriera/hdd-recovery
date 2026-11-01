@@ -87,10 +87,11 @@ Use `GET /health` on the same mapped UI port for the TrueNAS health probe.
 
 ```bash
 # On TrueNAS, open a shell:
-git clone https://github.com/joanmarcriera/hdd-forensics.git /mnt/BigDisk/hdd-forensics
-cd /mnt/BigDisk/hdd-forensics/docker
+git clone https://github.com/joanmarcriera/hdd-recovery.git /mnt/BigDisk/hdd-recovery
+cd /mnt/BigDisk/hdd-recovery/docker
 
-# Edit .env or export variables: set TTYD_PASSWORD and host mount paths
+# Create .env from the template, then set TTYD_PASSWORD and host mount paths
+cp .env.example .env
 
 docker compose --env-file .env pull
 docker compose --env-file .env up -d

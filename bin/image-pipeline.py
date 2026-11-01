@@ -317,7 +317,9 @@ def main() -> int:
                     help="seconds between useful-progress probes (default from "
                          "STAGE_PROGRESS_INTERVAL env or "
                          f"{DEFAULT_PROGRESS_INTERVAL})")
-    args = ap.parse_args()
+    # parse_intermixed_args: callers (serve_pipeline, image-queue) put options
+    # before the STAGE list; plain parse_args() rejects that on Python < 3.13.
+    args = ap.parse_intermixed_args()
 
     if args.stage_timeout is not None:
         stage_timeout = args.stage_timeout

@@ -44,3 +44,25 @@ jobs:
 
       - name: Unit tests
         run: ./tests/run-unit.sh
+
+  supervisor-go:
+    # The Go process supervisor (docker/supervisor) ships in the container
+    # image but its tests were not run anywhere before. Pure unit tests: no
+    # network listeners beyond localhost, no privileges, no devices.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: docker/supervisor
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
+        with:
+          go-version-file: docker/supervisor/go.mod
+          cache: false   # no go.sum: the module has no dependencies
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -race -count=1 ./...
